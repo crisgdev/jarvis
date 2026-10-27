@@ -67,6 +67,23 @@ def transcribe(
         text_parts = [seg.text.strip() for seg in segments]
         text = " ".join(text_parts).strip()
 
+        # Fallback: si el VAD filtró todo (frases cortas o voz baja), reintentar
+        # sin VAD para no perder la transcripción.
+        if not text and vad_filter:
+            logger.info("VAD no detecto voz; reintentando sin VAD")
+            segments, info = model.transcribe(
+                audio_float,
+                language=language,
+                beam_size=beam_size,
+                temperature=temperature,
+                condition_on_previous_text=False,
+                without_timestamps=True,
+                vad_filter=False,
+                initial_prompt=initial_prompt,
+            )
+            text_parts = [seg.text.strip() for seg in segments]
+            text = " ".join(text_parts).strip()
+
         if text:
             logger.info(
                 "Transcrito (%.1fs, %s): %s",
