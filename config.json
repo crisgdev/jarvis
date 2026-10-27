@@ -1,0 +1,89 @@
+{
+    "voice": {
+        "language": "es",
+        "tts_voice": "es-MX-DaliaNeural",
+        "stt_model": "small",
+        "stt_beam_size": 1,
+        "stt_temperature": 0,
+        "stt_initial_prompt": "Hola JARVIS, abre google, abre youtube, dime la hora, cual es la fecha, reproduce musica, envia un correo, crea un evento, recuerda que, gracias",
+        "activation_key": "ctrl+shift+j",
+        "once_key": "ctrl+alt+shift+j",
+        "auto_start": false,
+        "confirm_timeout": 10,
+        "interrupt_enabled": true,
+        "interrupt_threshold": 1500,
+        "interrupt_max_wait": 12
+    },
+    "llm": {
+        "model": "gemini-3.5-flash-lite",
+        "max_history_turns": 8,
+        "max_output_tokens": 1024,
+        "temperature": 0.7
+    },
+    "memory": {
+        "enabled": true,
+        "semantic_search": false,
+        "db_path": "jarvis_memory.db"
+    },
+    "calendar": {
+        "timezone": "America/Lima",
+        "primary_calendar_id": "primary",
+        "include_all_user_calendars": true,
+        "max_results": 100
+    },
+    "gui": {
+        "theme": "dark",
+        "window_title": "JARVIS - Asistente Personal",
+        "window_size": [
+            900,
+            700
+        ],
+        "tray": true
+    },
+    "audio": {
+        "sample_rate": 16000,
+        "max_record_seconds": 0,
+        "silence_threshold": 500,
+        "silence_timeout": 2.0,
+        "safety_max_seconds": 45
+    },
+    "browser": {
+        "chrome_profile": "auto",
+        "max_tabs_per_folder": 8
+    },
+    "input": {
+        "enabled": true,
+        "screenshot_dir": "logs/screenshots",
+        "max_image_width": 1280,
+        "jpeg_quality": 75,
+        "type_delay": 0.02
+    },
+    "opencode": {
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 4096,
+        "username": "opencode",
+        "password": "",
+        "model": "opencode/big-pickle",
+        "directory": "",
+        "auto_start": true,
+        "permissions": "allow",
+        "wait_timeout": 240,
+        "request_timeout": 30,
+        "start_timeout": 90,
+        "shutdown_on_exit": false
+    },
+    "telegram": {
+        "enabled": true,
+        "response_style": "markdown",
+        "confirm_timeout": 60
+    },
+    "power": {
+        "shutdown_mode": "sleep"
+    },
+    "wol": {
+        "mac": "B0:6E:BF:11:1A:4C",
+        "broadcast": "192.168.18.255",
+        "port": 9
+    }
+}

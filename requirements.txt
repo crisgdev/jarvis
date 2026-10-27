@@ -1,0 +1,57 @@
+# JARVIS - Asistente de Voz Personal
+# Dependencias del proyecto
+
+# IA / Cerebro
+google-genai>=0.3.0
+
+# Speech-to-Text
+faster-whisper>=1.0.0
+
+# Text-to-Speech
+edge-tts>=6.1.0
+
+# Audio
+sounddevice>=0.4.0
+numpy>=1.24.0
+pygame-ce>=2.4.0
+
+# GUI
+customtkinter>=5.2.0
+
+# Bandeja del sistema
+pystray>=0.19.0
+Pillow>=10.0.0
+
+# Navegador
+duckduckgo-search>=7.0.0
+yt-dlp>=2025.1.15
+
+# Email
+yagmail>=0.5.0
+
+# Google Calendar
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-api-python-client>=2.108.0
+
+# Sistema
+psutil>=5.9.0
+keyboard>=0.13.5
+
+# Control de teclado/raton y captura de pantalla
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+pygetwindow>=0.0.9
+
+# Utilidades
+python-dotenv>=1.0.0
+tzdata>=2024.1
+
+# Telegram bot (chat)
+python-telegram-bot>=22.0
+
+# Memoria (opcional)
+# chromadb>=0.4.0
+# sentence-transformers>=2.2.0
+
+# Los tests corren con unittest (stdlib), sin dependencias extra.
