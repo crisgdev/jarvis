@@ -172,6 +172,19 @@ def main():
         once_callback=jarvis.start_listening,
     )
 
+    # Detector de doble palmada (activa JARVIS con un aplauso)
+    clap_enabled = bool(get_setting("voice", "clap_enabled", False))
+    if clap_enabled:
+        try:
+            from services import clap_detector
+
+            if clap_detector.start_clap_listener(jarvis.on_double_clap):
+                logger.info("Detector de palmadas activo")
+            else:
+                logger.info("Detector de palmadas desactivado por config")
+        except Exception as e:
+            logger.warning("No se pudo iniciar el detector de palmadas: %s", e)
+
     auto_start = bool(get_setting("voice", "auto_start", True))
     if auto_start:
         logger.info("Modo voz 100%%: iniciando conversacion continua")
@@ -240,6 +253,12 @@ def main():
             logger.warning("No se pudo detener OpenCode: %s", e)
         from services import wake_word
         wake_word.stop_listening()
+        try:
+            from services import clap_detector
+
+            clap_detector.stop_clap_listener()
+        except Exception:
+            pass
         try:
             from gui.tray import stop as stop_tray
             stop_tray()

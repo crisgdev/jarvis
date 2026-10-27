@@ -12,7 +12,13 @@
         "confirm_timeout": 10,
         "interrupt_enabled": true,
         "interrupt_threshold": 1500,
-        "interrupt_max_wait": 12
+        "interrupt_max_wait": 12,
+        "clap_enabled": true,
+        "clap_threshold": 0.65,
+        "clap_double_window_min": 0.12,
+        "clap_double_window_max": 0.9,
+        "clap_cooldown": 2.5,
+        "clap_greeting": "Hola, en qué te ayudo"
     },
     "llm": {
         "model": "gemini-3.5-flash-lite",

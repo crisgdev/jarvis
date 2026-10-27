@@ -209,6 +209,18 @@ class JARVIS:
             self._on_state_change(new_state.value)
         logger.info("Estado: %s", new_state.value)
 
+        # El detector de palmadas solo vive mientras JARVIS esta en reposo:
+        # se pausa al grabar/procesar/hablar y se reanuda al volver a IDLE.
+        try:
+            from services import clap_detector
+
+            if new_state == State.IDLE:
+                clap_detector.resume()
+            else:
+                clap_detector.pause()
+        except Exception as e:
+            logger.debug("Clap detector no disponible: %s", e)
+
     def process_text(self, text: str):
         if self.state != State.IDLE:
             logger.warning("No se puede procesar, estado: %s", self.state.value)
@@ -275,6 +287,30 @@ class JARVIS:
             time.sleep(0.1)
         if self.state == State.LISTENING:
             self.stop_listening()
+
+    def on_double_clap(self):
+        """Callback del detector de palmadas: saluda y empieza a escuchar."""
+        if self.state != State.IDLE:
+            logger.info("Doble palmada ignorada (estado=%s)", self.state.value)
+            return
+
+        greeting = (
+            get_config().get("voice", {}).get("clap_greeting", "Hola, en qué te ayudo")
+        )
+
+        def _run():
+            try:
+                speak(greeting)
+                # Esperar a que termine el saludo para no capturar la propia voz
+                deadline = time.time() + 6
+                while is_speaking() and time.time() < deadline:
+                    time.sleep(0.1)
+                self.start_listening()
+            except Exception as e:
+                logger.error("Error tras doble palmada: %s", e)
+
+        logger.info("Doble palmada detectada: saludando y escuchando")
+        threading.Thread(target=_run, daemon=True).start()
 
     def stop_listening(self):
         if self.state != State.LISTENING:

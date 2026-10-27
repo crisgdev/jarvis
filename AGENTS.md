@@ -23,6 +23,7 @@ JARVIS es un asistente de voz personal construido en Python, inspirado en el asi
 | Teclado/Ratón | pyautogui + pyperclip + pygetwindow | ✅ Instalado |
 | Audio | sounddevice (captura) + pygame (reproducción) | ✅ Instalado |
 | Chat (Telegram) | python-telegram-bot | ✅ Instalado |
+| Activación por palmadas | sounddevice (detección de doble palmada) | ✅ Implementado (`voice.clap_enabled`) |
 
 ## API Keys y Credenciales
 
@@ -172,6 +173,7 @@ Jarvis/
 │   ├── stt.py                 # Speech-to-Text (faster-whisper)
 │   ├── tts.py                 # Text-to-Speech (edge-tts)
 │   ├── wake_word.py           # Hotkeys Ctrl+Alt+Shift+J (una consulta) y Ctrl+Shift+J (pausa/reanuda llamada)
+│   ├── clap_detector.py       # Detector de doble palmada (activa JARVIS con un aplauso)
 │   └── telegram_bot.py        # Bot de Telegram (mismo cerebro/memoria)
 │
 ├── brain/
@@ -226,6 +228,7 @@ Jarvis/
 
 - STT (reconocimiento de voz): usa `faster-whisper`. Modelos disponibles en `config.json` -> `voice.stt_model`: `small` (RÁPIDO para CPU moderada, ~2-3s por frase; el recomendado para conversación fluida en esta PC; algo menos preciso), `turbo` (balance, ~5x más lento en esta CPU; más preciso), `medium` (lento, más preciso), `large-v3` (muy lento, máxima precisión). También configurable: `stt_beam_size` (1 = greedy, el más rápido), `stt_temperature` (0 = determinista) y `stt_initial_prompt`. Benchmark en esta PC (7.6s de audio): small ~2.6s vs turbo ~14.5s (sin VAD).
 - El wake word con Picovoice ya NO es gratis (discontinuó junio 2026). Usar Ctrl+Alt+Shift+J (una consulta) / Ctrl+Shift+J (llamada) por ahora.
+- **Doble palmada**: `services/clap_detector.py` detecta dos transients (pico >= `voice.clap_threshold`, por defecto 0.65 del máximo int16) dentro de `voice.clap_double_window_min..max` (0.12-0.9 s). Al detectarlas, JARVIS saluda (`voice.clap_greeting`) y entra en modo una consulta. Solo está activo en reposo (se pausa al grabar/procesar/hablar). Configurable: `voice.clap_enabled` (default true), `clap_cooldown` (2.5 s). Las palmadas deben ser fuertes y nítidas para no dispararse con la voz o la música.
 - La API key de Gemini formato `AQ.Ab...` es el formato nuevo y correcto de Google.
 - El archivo `credentials.json` de Google Calendar ya está configurado.
 - ChromaDB es opcional - se puede habilitar después con `--enable-memory`.
