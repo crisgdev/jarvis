@@ -303,6 +303,18 @@ def _folder_search_roots() -> list[str]:
     for extra in (get_config().get("paths", {}) or {}).get("extra_project_roots", []):
         if extra and extra not in roots:
             roots.append(extra)
+    # Carpetas comunes de proyectos (ingenieria, trabajos, etc.) para encontrar
+    # proyectos anidados mas rapidamente sin tener que caminar todo el disco.
+    documents = os.path.join(user_profile, "Documents")
+    for sub in (
+        "Proyectos",
+        "Proyectos-Ingenieria-Sistemas",
+        "Proyectos-Ingenieria-Sistemas/Personales",
+        "Projects",
+    ):
+        cand = os.path.join(documents, *sub.split("/"))
+        if os.path.isdir(cand) and cand not in roots:
+            roots.append(cand)
     # Raíces de unidad como último recurso (búsqueda superficial).
     for drive in ("C:", "D:"):
         if os.path.isdir(drive) and drive not in roots:
@@ -358,7 +370,7 @@ def _tokens_match_folder(name: str, token: str) -> bool:
     return bool(token_c) and (name_c == token_c or token_c in name_c)
 
 
-def _find_folder(name: str, max_depth: int = 4) -> str | None:
+def _find_folder(name: str, max_depth: int = 8) -> str | None:
     """Busca una carpeta por nombre en ubicaciones comunes del usuario.
 
     Devuelve la ruta de la carpeta si la encuentra, None si no.
@@ -390,6 +402,17 @@ def _find_folder(name: str, max_depth: int = 4) -> str | None:
                 if depth > max_depth:
                     dirnames[:] = []
                     continue
+                # Verificar si el nombre del directorio actual coincide con el token.
+                if _tokens_match_folder(os.path.basename(dirpath), token):
+                    full = dirpath
+                    if _tokens_match_folder(os.path.basename(dirpath), token) and (
+                        re.sub(r"[^a-z0-9]", "", os.path.basename(dirpath).lower())
+                        == re.sub(r"[^a-z0-9]", "", token.lower())
+                    ):
+                        exact_matches.append(full)
+                    else:
+                        partial_matches.append(full)
+                # Verificar subcarpetas.
                 for d in dirnames:
                     if _tokens_match_folder(d, token):
                         full = os.path.join(dirpath, d)
