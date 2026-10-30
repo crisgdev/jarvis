@@ -16,6 +16,67 @@ from brain.tools_executor import register_tool
 from config import get_config
 from tools.window_tools import _activate_window
 
+try:
+    from tools import screen_tools as _screen_tools
+except Exception:  # pragma: no cover
+    _screen_tools = None
+
+
+def _last_screenshot_info():
+    if _screen_tools is None:
+        return None
+    return getattr(_screen_tools, "_LAST_SCREENSHOT", None)
+
+
+def _screen_size():
+    try:
+        import pyautogui
+        if pyautogui is not None:
+            s = pyautogui.size()
+            return int(s[0]), int(s[1])
+    except Exception:
+        pass
+    return None
+
+
+def _clamp_to_screen(x, y):
+    size = _screen_size()
+    if size is None:
+        return int(x), int(y)
+    sw, sh = size
+    return max(0, min(sw - 1, int(x))), max(0, min(sh - 1, int(y)))
+
+
+def _to_screen_coords(x, y):
+    """Convierte coordenadas de la imagen capturada (lo que ve Gemini) a
+    coordenadas reales de pantalla, si hay una captura reciente.
+
+    Calibracion: se clampean las coordenadas al tamano real de la pantalla
+    para evitar clics fuera de rango (que pyautogui rechaza o desvia).
+    """
+    info = _last_screenshot_info()
+    if not info:
+        return _clamp_to_screen(x, y)
+    import time
+
+    if time.time() - info.get("timestamp", 0) > 120:
+        return _clamp_to_screen(x, y)
+    ix, iy = int(x), int(y)
+    iw, ih = info["image_w"], info["image_h"]
+    # Si las coordenadas estan fuera del rango de la imagen, asumimos que ya
+    # son coordenadas reales de pantalla.
+    if not (0 <= ix <= iw and 0 <= iy <= ih):
+        return _clamp_to_screen(ix, iy)
+    sx = info.get("scale_x", 1.0)
+    sy = info.get("scale_y", 1.0)
+    if abs(sx - 1.0) < 1e-6 and abs(sy - 1.0) < 1e-6:
+        return _clamp_to_screen(ix, iy)
+    ox = info.get("origin_x", 0)
+    oy = info.get("origin_y", 0)
+    rx = int(round(ix * sx + ox))
+    ry = int(round(iy * sy + oy))
+    return _clamp_to_screen(rx, ry)
+
 logger = logging.getLogger("jarvis.tools.input")
 
 try:
@@ -270,8 +331,16 @@ def _click(x: int = None, y: int = None, button: str = "left", clicks: int = 1,
         module = _require_pyautogui()
 
         if x is not None and y is not None:
-            _guard_fail_safe(module.click, int(x), int(y), button=button, clicks=clicks)
-            where = f"({x}, {y})"
+            rx, ry = _to_screen_coords(x, y)
+            # Calibracion: mover primero al punto (suave) y luego clicar,
+            # evita que el clic caiga desfasado en movimientos rapidos.
+            try:
+                module.moveTo(rx, ry, duration=0.08)
+            except Exception:
+                pass
+            time.sleep(float(_input_settings().get("click_settle_ms", 50)) / 1000.0)
+            _guard_fail_safe(module.click, rx, ry, button=button, clicks=clicks)
+            where = f"({rx}, {ry})"
         else:
             _guard_fail_safe(module.click, button=button, clicks=clicks)
             where = "donde estaba el puntero"
@@ -280,7 +349,7 @@ def _click(x: int = None, y: int = None, button: str = "left", clicks: int = 1,
         logger.info("Clic %s%s", where, target)
         return {
             "status": "success",
-            "position": [x, y] if x is not None and y is not None else None,
+            "position": [rx, ry] if x is not None and y is not None else None,
             "message": f"Listo, hice clic {where}{target}.",
         }
     except Exception as e:
@@ -299,11 +368,17 @@ def _scroll(direction: str = "down", amount: int = 3) -> dict:
         amount = max(1, int(amount or 1))
         module = _require_pyautogui()
 
+        # Calibracion: un "amount" del usuario equivale a varias lineas de
+        # scroll (configurable). Evita scroll demasiado corto o demasiado largo.
+        lines_per_unit = int(_input_settings().get("scroll_lines_per_unit", 3))
+        lines_per_unit = max(1, lines_per_unit)
+        total = amount * lines_per_unit
+
         if direction in ("up", "down"):
-            clicks = amount if direction == "up" else -amount
+            clicks = total if direction == "up" else -total
             _guard_fail_safe(module.scroll, clicks)
         else:
-            clicks = amount if direction == "right" else -amount
+            clicks = total if direction == "right" else -total
             _guard_fail_safe(module.hscroll, clicks)
 
         logger.info("Scroll %s x%d", direction, amount)
@@ -322,12 +397,14 @@ def _move_mouse(x: int, y: int) -> dict:
     """Mueve el puntero del raton a una posicion."""
     try:
         module = _require_pyautogui()
-        _guard_fail_safe(module.moveTo, int(x), int(y))
-        logger.info("Raton movido a (%s, %s)", x, y)
+        rx, ry = _to_screen_coords(x, y)
+        duration = float(_input_settings().get("mouse_move_duration", 0.15))
+        _guard_fail_safe(module.moveTo, rx, ry, duration=duration)
+        logger.info("Raton movido a (%s, %s)", rx, ry)
         return {
             "status": "success",
-            "position": [int(x), int(y)],
-            "message": f"Listo, movi el raton a ({x}, {y}).",
+            "position": [rx, ry],
+            "message": f"Listo, movi el raton a ({rx}, {ry}).",
         }
     except Exception as e:
         return {"error": f"No se pudo mover el raton: {e}"}

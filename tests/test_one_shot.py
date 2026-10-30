@@ -13,6 +13,8 @@ class FakeJarvis:
         self.state = State.IDLE
         self._lock = threading.Lock()
         self._on_state_change = None
+        self._push_to_talk = False
+        self._ptt_wanted = False
         self.stop_calls = 0
 
     def stop_listening(self):
@@ -24,6 +26,7 @@ class FakeJarvis:
 
 
 FakeJarvis._watch_recording = core_jarvis.JARVIS._watch_recording
+FakeJarvis._begin_listening = core_jarvis.JARVIS._begin_listening
 
 
 class FakeThread:

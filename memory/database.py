@@ -15,6 +15,20 @@ _db_path: Optional[Path] = None
 _connection: Optional[sqlite3.Connection] = None
 _db_lock = threading.RLock()
 
+# Contador en memoria que sube con cada escritura de MEMORIA (notas,
+# preferencias, proyectos). memory/context.py lo usa para invalidar su cache
+# del bloque de contexto sin consultar SQLite en cada turno.
+_memory_version = 0
+
+
+def memory_version() -> int:
+    return _memory_version
+
+
+def _bump_memory_version():
+    global _memory_version
+    _memory_version += 1
+
 
 def _locked(func):
     def _wrapper(*args, **kwargs):
@@ -204,6 +218,7 @@ def set_preference(key: str, value: str):
         (key, value, value),
     )
     conn.commit()
+    _bump_memory_version()
 
 
 def get_preference(key: str, default: str = None) -> Optional[str]:
@@ -222,6 +237,7 @@ def delete_preference(key: str):
     conn = _get_connection()
     conn.execute("DELETE FROM preferences WHERE key = ?", (key,))
     conn.commit()
+    _bump_memory_version()
 
 
 # ── Projects ──
@@ -233,6 +249,7 @@ def create_project(name: str, description: str = "") -> int:
         (name, description),
     )
     conn.commit()
+    _bump_memory_version()
     return cursor.lastrowid
 
 
@@ -271,6 +288,7 @@ def update_project_status(name: str, status: str):
         (status, name),
     )
     conn.commit()
+    _bump_memory_version()
 
 
 def delete_project(name: str):
@@ -280,6 +298,7 @@ def delete_project(name: str):
         conn.execute("DELETE FROM project_notes WHERE project_id = ?", (row["id"],))
         conn.execute("DELETE FROM projects WHERE id = ?", (row["id"],))
         conn.commit()
+        _bump_memory_version()
 
 
 # ── Project Notes ──
@@ -298,6 +317,7 @@ def add_project_note(project_name: str, content: str) -> int:
         (row["id"],),
     )
     conn.commit()
+    _bump_memory_version()
     return cursor.lastrowid
 
 
@@ -322,6 +342,7 @@ def save_note(content: str, category: str = "general") -> int:
         (content, category),
     )
     conn.commit()
+    _bump_memory_version()
     return cursor.lastrowid
 
 
@@ -389,6 +410,8 @@ def delete_notes_by_content(query: str) -> list[dict]:
     for r in rows:
         conn.execute("DELETE FROM notes WHERE id = ?", (r["id"],))
     conn.commit()
+    if deleted:
+        _bump_memory_version()
     return deleted
 
 

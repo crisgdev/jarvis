@@ -145,7 +145,7 @@ class ProcessForArtifactsTest(unittest.TestCase):
         brain.chat_message.return_value = "Veo Chrome"
         brain.artifacts = [{"type": "image", "path": "C:/tmp/x.jpg"}]
 
-        with mock.patch.object(tg, "_get_brain", return_value=brain):
+        with mock.patch("brain.gemini.GeminiBrain", return_value=brain):
             with mock.patch.object(tg, "_reply_with_images") as mock_imgs:
                 with mock.patch.object(tg, "_reply") as mock_reply:
                     with mock.patch("memory.context.save_conversation"):
@@ -164,7 +164,7 @@ class ProcessForArtifactsTest(unittest.TestCase):
         brain.chat_message.return_value = "Hola"
         brain.artifacts = []
 
-        with mock.patch.object(tg, "_get_brain", return_value=brain):
+        with mock.patch("brain.gemini.GeminiBrain", return_value=brain):
             with mock.patch.object(tg, "_reply_with_images") as mock_imgs:
                 with mock.patch.object(tg, "_reply") as mock_reply:
                     with mock.patch("memory.context.save_conversation"):

@@ -5,8 +5,11 @@ from typing import Any, Callable
 logger = logging.getLogger("jarvis.tools")
 
 RISK_LEVELS = {
+    "show_plan": "safe",
     "get_system_info": "safe",
     "open_application": "moderate",
+    "open_vscode_folder": "moderate",
+    "vscode_disable_restricted_mode": "moderate",
     "close_application": "moderate",
     "control_volume": "moderate",
     "wake_on_lan": "moderate",
@@ -57,6 +60,7 @@ RISK_LEVELS = {
     # (el usuario pidio que JARVIS programe solo). Sube a "dangerous" si
     # quieres que pida permiso antes de tocar codigo.
     "opencode_code": "moderate",
+    "opencode_code_visual": "moderate",
     "opencode_result": "safe",
     "opencode_sessions": "safe",
     "opencode_mcp": "moderate",

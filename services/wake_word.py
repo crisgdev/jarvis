@@ -8,65 +8,50 @@ logger = logging.getLogger("jarvis.wake_word")
 
 _listener_thread: threading.Thread | None = None
 _running = False
-_callback: Callable | None = None
 _once_callback: Callable | None = None
 
 
 def _get_hotkey() -> str:
-    cfg = get_config().get("voice", {})
-    return cfg.get("activation_key", "ctrl+shift+j")
-
-
-def _get_hotkey_once() -> str:
+    """Unico atajo de activacion: una consulta por pulsacion."""
     cfg = get_config().get("voice", {})
     return cfg.get("once_key", "ctrl+alt+shift+j")
 
 
-def start_listening(callback: Callable, once_callback: Callable | None = None):
-    global _listener_thread, _running, _callback, _once_callback
+def start_listening(once_callback: Callable):
+    global _listener_thread, _running, _once_callback
 
     if _running:
         logger.warning("Ya esta escuchando")
         return
 
-    _callback = callback
     _once_callback = once_callback
     _running = True
     hotkey = _get_hotkey()
-    hotkey_once = _get_hotkey_once()
 
     def _listen():
         try:
             import keyboard
 
-            logger.info("Escuchando hotkeys: %s (toggle) y %s (una consulta)", hotkey, hotkey_once)
+            logger.info("Escuchando hotkey: %s (una consulta)", hotkey)
             keyboard.add_hotkey(hotkey, _on_trigger)
-            if hotkey_once and hotkey_once != hotkey:
-                keyboard.add_hotkey(hotkey_once, _on_trigger_once)
             keyboard.wait()
         except ImportError:
             logger.warning("Libreria 'keyboard' no instalada. Instala con: pip install keyboard")
             logger.info("Modo fallback: presiona Enter para activar")
             while _running:
                 input()
-                if _running and _callback:
-                    _callback()
+                if _running:
+                    _on_trigger()
         except Exception as e:
             logger.error("Error en listener: %s", e)
 
     _listener_thread = threading.Thread(target=_listen, daemon=True)
     _listener_thread.start()
-    logger.info("Wake word listener iniciado")
+    logger.info("Listener de activacion iniciado")
 
 
 def _on_trigger():
     logger.info("Hotkey detectada!")
-    if _callback:
-        _callback()
-
-
-def _on_trigger_once():
-    logger.info("Hotkey una consulta detectada!")
     if _once_callback:
         _once_callback()
 
@@ -79,7 +64,7 @@ def stop_listening():
         keyboard.unhook_all()
     except Exception:
         pass
-    logger.info("Wake word listener detenido")
+    logger.info("Listener de activacion detenido")
 
 
 def is_listening() -> bool:

@@ -128,34 +128,50 @@ class MouseTest(unittest.TestCase):
         self.assertIn("error", result)
 
     def test_scroll_down_uses_negative_clicks(self):
-        with mock.patch("tools.input_tools.pyautogui") as pg:
+        with mock.patch("tools.input_tools.pyautogui") as pg, mock.patch(
+            "tools.input_tools._input_settings", return_value={"scroll_lines_per_unit": 1}
+        ):
             pg.KEYBOARD_KEYS = []
             result = execute_tool("scroll", {"direction": "down", "amount": 5})
         self.assertEqual(result["status"], "success")
         pg.scroll.assert_called_once_with(-5)
 
     def test_scroll_up_uses_positive_clicks(self):
-        with mock.patch("tools.input_tools.pyautogui") as pg:
+        with mock.patch("tools.input_tools.pyautogui") as pg, mock.patch(
+            "tools.input_tools._input_settings", return_value={"scroll_lines_per_unit": 1}
+        ):
             pg.KEYBOARD_KEYS = []
             execute_tool("scroll", {"direction": "up", "amount": 2})
         pg.scroll.assert_called_once_with(2)
 
     def test_scroll_horizontal_uses_hscroll(self):
-        with mock.patch("tools.input_tools.pyautogui") as pg:
+        with mock.patch("tools.input_tools.pyautogui") as pg, mock.patch(
+            "tools.input_tools._input_settings", return_value={"scroll_lines_per_unit": 1}
+        ):
             pg.KEYBOARD_KEYS = []
             execute_tool("scroll", {"direction": "right", "amount": 4})
         pg.hscroll.assert_called_once_with(4)
+
+    def test_scroll_amount_is_calibrated(self):
+        with mock.patch("tools.input_tools.pyautogui") as pg, mock.patch(
+            "tools.input_tools._input_settings", return_value={"scroll_lines_per_unit": 3}
+        ):
+            pg.KEYBOARD_KEYS = []
+            execute_tool("scroll", {"direction": "down", "amount": 2})
+        pg.scroll.assert_called_once_with(-6)
 
     def test_scroll_invalid_direction(self):
         result = execute_tool("scroll", {"direction": "arriba"})
         self.assertIn("error", result)
 
     def test_move_mouse(self):
-        with mock.patch("tools.input_tools.pyautogui") as pg:
+        with mock.patch("tools.input_tools.pyautogui") as pg, mock.patch(
+            "tools.input_tools._input_settings", return_value={"mouse_move_duration": 0}
+        ):
             pg.KEYBOARD_KEYS = []
             result = execute_tool("move_mouse", {"x": 10, "y": 20})
         self.assertEqual(result["status"], "success")
-        pg.moveTo.assert_called_once_with(10, 20)
+        pg.moveTo.assert_called_once_with(10, 20, duration=0)
 
 
 class FailSafeTest(unittest.TestCase):

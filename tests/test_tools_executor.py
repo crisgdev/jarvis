@@ -85,7 +85,10 @@ class DefinitionsCoverageTest(unittest.TestCase):
     def test_all_gemini_declared_tools_are_implemented(self):
         from brain.tools_definitions import TOOLS
         declared = {t.name for t in TOOLS}
-        missing = declared - set(_tool_registry)
+        # show_plan la intercepta brain/gemini.py (solo muestra el plan en la
+        # GUI); nunca llega al ejecutor, asi que no tiene registro propio.
+        intercepted = {"show_plan"}
+        missing = declared - set(_tool_registry) - intercepted
         self.assertEqual(missing, set())
 
 

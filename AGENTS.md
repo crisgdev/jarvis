@@ -10,9 +10,9 @@ JARVIS es un asistente de voz personal construido en Python, inspirado en el asi
 |---|---|---|
 | Lenguaje | Python 3.14.6 | ✅ Instalado |
 | IA / Cerebro | Google Gemini API (Flash) | ✅ API Key configurada |
-| Speech-to-Text | faster-whisper (turbo, configurable en config.json `voice.stt_model`: small/turbo/medium/large-v3) | ✅ Instalado |
+| Speech-to-Text | faster-whisper (`base` por defecto; config.json `voice.stt_model`: tiny/base/small/turbo/medium/large-v3) + `hotwords` de nombres propios + `cpu_threads` | ✅ Instalado |
 | Text-to-Speech | edge-tts (neural, español) | ✅ Instalado |
-| Activación | Ctrl+Alt+Shift+J (una consulta) + Ctrl+Shift+J (modo llamada) + GUI buttons (teclado `keyboard`) | ✅ Instalado |
+| Activación | Ctrl+Alt+Shift+J (una consulta) + ESPACIO manteniendo (push-to-talk en la GUI) | ✅ Instalado |
 | GUI | CustomTkinter | ✅ Instalado |
 | Memoria | SQLite (persistente) | Built-in Python |
 | Búsqueda semántica | ChromaDB + sentence-transformers (opcional, apagada: `memory.semantic_search=false`) | Opcional |
@@ -116,6 +116,9 @@ Gemini puede elegir automáticamente qué herramienta usar:
 - `list_projects`: Listar proyectos activos
 - `update_project_status`: Cambiar estado de proyecto
 
+### Interfaz
+- `show_plan`: Declara en pantalla el plan de subtareas ANTES de ejecutar una orden de 2+ pasos (lo intercepta `brain/gemini.py`, no ejecuta nada). Si Gemini no la llama, el panel se llena con las tools reales. Ver sección "Interfaz (GUI)".
+
 ### Pantalla, teclado, ratón y ventanas
 - `take_screenshot`: Captura la pantalla (o una región `x,y,w,h`). **El cerebro adjunta la imagen REAL al modelo** (`brain/gemini.py` la lee del disco y la manda como `Part.from_bytes`), así que Gemini de verdad VE la pantalla. Opcional `region` y `max_width`.
 - `press_key`: Pulsa cualquier tecla o combinación (`i`, `enter`, `escape`, `tab`, flechas, `f1`-`f24`, `ctrl+c`, `ctrl+shift+j`, `alt+f4`). Opcional `presses` y `window` (título de la ventana destino).
@@ -172,21 +175,29 @@ Jarvis/
 │   ├── audio.py               # Captura de audio
 │   ├── stt.py                 # Speech-to-Text (faster-whisper)
 │   ├── tts.py                 # Text-to-Speech (edge-tts)
-│   ├── wake_word.py           # Hotkeys Ctrl+Alt+Shift+J (una consulta) y Ctrl+Shift+J (pausa/reanuda llamada)
+│   ├── wake_word.py           # Hotkey Ctrl+Alt+Shift+J (una consulta)
 │   ├── clap_detector.py       # Detector de doble palmada (activa JARVIS con un aplauso)
 │   └── telegram_bot.py        # Bot de Telegram (mismo cerebro/memoria)
 │
 ├── brain/
 │   ├── __init__.py
-│   ├── gemini.py              # Integración Gemini + tools
-│   ├── tools_definitions.py   # Definiciones de tools
+│   ├── gemini.py              # Integración Gemini + tools (+ router, escalado, log de turnos)
+│   ├── prompts.py             # PROMPT_CORE + 9 packs de capacidad + build_prompt()
+│   ├── router.py              # Router determinista: packs + tools + tier de modelo
+│   ├── tools_definitions.py   # Definiciones de tools (+ TOOLS_BY_NAME / tools_for())
+│   ├── tool_labels.py         # Traduccion de tool -> texto de la GUI
 │   └── tools_executor.py      # Ejecutor con permisos
 │
 ├── memory/
 │   ├── __init__.py
-│   ├── database.py            # SQLite CRUD
-│   ├── context.py             # Gestión de contexto LLM
+│   ├── database.py            # SQLite CRUD (+ memory_version para invalidar cache)
+│   ├── context.py             # Contexto LLM con presupuesto de chars y cache
 │   └── search.py              # Búsqueda semántica (ChromaDB)
+│
+├── utils/
+│   ├── __init__.py
+│   ├── logger.py              # Logging
+│   └── turn_log.py            # Registro estructurado por turno (logs/turns.jsonl)
 │
 ├── tools/
 │   ├── __init__.py
@@ -205,14 +216,15 @@ Jarvis/
 ├── gui/
 │   ├── __init__.py
 │   ├── app.py                 # Ventana principal
-│   ├── call_view.py           # Overlay animado del modo llamada (orbe + particulas)
+│   ├── call_view.py           # Orbe animado (orbe + particulas) y push-to-talk al mantener pulsado
 │   ├── components.py          # Widgets reutilizables
 │   ├── confirmation.py        # Diálogos de confirmación
 │   └── tray.py                # Icono en la bandeja del sistema (pystray)
 │
 └── utils/
     ├── __init__.py
-    └── logger.py              # Logging
+    ├── logger.py              # Logging
+    └── turn_log.py            # Registro estructurado por turno (logs/turns.jsonl)
 ```
 
 ## Preferencias del Usuario
@@ -221,20 +233,78 @@ Jarvis/
 - Framework GUI: CustomTkinter
 - LLM: Google Gemini Flash (gratis)
 - Hardware: PC moderada (sin GPU dedicada)
-- Activación de voz: Ctrl+Alt+Shift+J para UNA consulta (estado `listening` → procesa → vuelve a `idle`); Ctrl+Shift+J alterna el modo llamada. Orden de teclas configurables en `config.json` -> `voice.once_key` y `voice.activation_key` (futuro: openWakeWord).
+- Activación de voz: `Ctrl+Alt+Shift+J` para UNA consulta (estado `listening` → procesa → vuelve a `idle`). Orden de teclas configurable en `config.json` -> `voice.once_key` (futuro: openWakeWord).
 - Base de datos: SQLite (no PostgreSQL)
 
 ## Notas Importantes
 
-- STT (reconocimiento de voz): usa `faster-whisper`. Modelos disponibles en `config.json` -> `voice.stt_model`: `small` (RÁPIDO para CPU moderada, ~2-3s por frase; el recomendado para conversación fluida en esta PC; algo menos preciso), `turbo` (balance, ~5x más lento en esta CPU; más preciso), `medium` (lento, más preciso), `large-v3` (muy lento, máxima precisión). También configurable: `stt_beam_size` (1 = greedy, el más rápido), `stt_temperature` (0 = determinista) y `stt_initial_prompt`. Benchmark en esta PC (7.6s de audio): small ~2.6s vs turbo ~14.5s (sin VAD).
-- El wake word con Picovoice ya NO es gratis (discontinuó junio 2026). Usar Ctrl+Alt+Shift+J (una consulta) / Ctrl+Shift+J (llamada) por ahora.
+- STT (reconocimiento de voz): usa `faster-whisper` con **`base` por defecto** (`voice.stt_model`; también `tiny`/`small`/`turbo`/`medium`/`large-v3`). `base` es el punto de equilibrio en esta CPU para conversación fluida; si algún día hace falta más precisión se sube a `small` sin tocar código (la config se recarga sola: `_config_key()` compara modelo + hilos y recrea `WhisperModel`). Ajustes: `stt_beam_size` (1 = greedy, el más rápido), `stt_temperature` (0 = determinista), `stt_initial_prompt` (frase de contexto, solo abre la primera ventana) y **`stt_hotwords`** (lista de nombres propios: JARVIS, Cristopher, OpenCode, Gmail, YouTube, Spotify, GitHub, VS Code, Instagram, WhatsApp, Telegram). `hotwords` se aplica en TODAS las ventanas de decodificación (se inyecta como `sot_prev`), por eso corrige nombres propios donde `initial_prompt` ya no llega. `voice.stt_cpu_threads` (6 en esta PC de 8 núcleos) se pasa a `WhisperModel(cpu_threads=...)`: sin eso CTranslate2 usa 4 hilos por defecto y deja núcleos sin usar. `0` = automático (todos los núcleos, tope 8). Benchmark previo (7.6s de audio): small ~2.6s vs turbo ~14.5s.
+- **Fin de frase**: `audio.silence_timeout = 1.2` s (antes más alto). El recorder corta cuando detecta ese silencio; en push-to-talk (ESPACIO/orbe) NO se corta por silencio, manda soltar.
+- El wake word con Picovoice ya NO es gratis (discontinuó junio 2026). Usar Ctrl+Alt+Shift+J (una consulta) por ahora.
 - **Doble palmada**: `services/clap_detector.py` detecta dos transients (pico >= `voice.clap_threshold`, por defecto 0.65 del máximo int16) dentro de `voice.clap_double_window_min..max` (0.12-0.9 s). Al detectarlas, JARVIS saluda (`voice.clap_greeting`) y entra en modo una consulta. Solo está activo en reposo (se pausa al grabar/procesar/hablar). Configurable: `voice.clap_enabled` (default true), `clap_cooldown` (2.5 s). Las palmadas deben ser fuertes y nítidas para no dispararse con la voz o la música.
 - La API key de Gemini formato `AQ.Ab...` es el formato nuevo y correcto de Google.
 - El archivo `credentials.json` de Google Calendar ya está configurado.
 - ChromaDB es opcional - se puede habilitar después con `--enable-memory`.
 - El usuario planea agregar wake word por palmadas en el futuro.
-- Modo voz 100%: `voice.auto_start=true` iniciaría la conversación continua (modo llamada) al arrancar; **por defecto está apagado** (`false`): JARVIS arranca en reposo (`idle`) todo el tiempo y atiende solo UNA consulta con `Ctrl+Alt+Shift+J` o el botón de la bandeja. La GUI es solo indicador visual y en `--background` la ventana se oculta a la bandeja del sistema (`gui.tray`). Hotkey `Ctrl+Shift+J` pausa/reanuda una llamada. El usuario puede INTERRUMPIR a JARVIS mientras habla con "para", "espera", "silencio", "cállate", "basta", etc. y rectificar su consulta en el mismo audio (`voice.interrupt_enabled`, `interrupt_threshold` alto para no oirse a si mismo, `interrupt_max_wait`).
+- Modo voz 100%: `voice.auto_start=true` iniciaría la conversación continua al arrancar; **por defecto está apagado** (`false`): JARVIS arranca en reposo (`idle`) todo el tiempo y atiende solo UNA consulta con `Ctrl+Alt+Shift+J`, ESPACIO manteniendo en la GUI, o el botón de la bandeja. La GUI es solo indicador visual y en `--background` la ventana se oculta a la bandeja del sistema (`gui.tray`). El usuario puede INTERRUMPIR a JARVIS mientras habla con "para", "espera", "silencio", "cállate", "basta", etc. y rectificar su consulta en el mismo audio (`voice.interrupt_enabled`, `interrupt_threshold` alto para no oirse a si mismo, `interrupt_max_wait`).
 - Telegram: mismo cerebro y memoria que la voz (cada canal su conversación). Confirmaciones de acciones peligrosas con botones inline; `services/telegram_bot.py` corre el bot en un hilo propio.
+
+## Router de turno, prompts en capas y registro (implementado)
+
+Antes, cada una de las 2 (o más) llamadas a Gemini de un turno enviaba el mismo
+prompt de ~77 líneas y las 53 declaraciones de tools. Eso es coste fijo en
+tokens + latencia y empeora la elección del modelo (mucha pólvora para "qué
+hora es"). Ahora hay tres decisiones tomadas en un solo sitio:
+
+- **`brain/router.py`** — función pura y determinista (0 tokens, ~0 ms). Mira el
+  texto del usuario, lo normaliza (minúsculas, sin acentos) y devuelve:
+  - `packs`: qué bloques de prompt aplican (`media`, `mail`, `calendar`,
+    `files`, `memory`, `screen`, `dev`, `power`, `bookmarks`).
+  - `tools`: las tools que viajan a Gemini (`CORE_TOOLS` = 8 siempre +
+    las del pack). Nunca se envía una tool que no aplique.
+  - `tier`: `fast` (`gemini-3.5-flash-lite`) o `strong`
+    (`gemini-3.6-flash`). Es `strong` si el pack es delicado
+    (`calendar`/`dev`/`mail`), si la orden es compuesta ("todos los", "y
+    luego", "hasta el"...) o si pasa de 16 palabras. El canal Telegram
+    (`detailed=True`) siempre va `strong`.
+- **`brain/prompts.py`** — `PROMPT_CORE` (identidad, honestidad, reglas de
+  herramientas) + un pack por capacidad. `build_prompt(core, packs, detailed)`
+  ensambla solo lo que aplica, en orden estable. Una pregunta simple baja de
+  ~1830 a ~370 tokens de prompt; una de calendario ronda los ~770.
+- **`brain/gemini.py`** — `_apply_route(text)` aplica las tres decisiones
+  juntas (`_create_chat(target, history=...)` + `tools_for(subset)`), y solo
+  recrea el chat si cambió la ruta (`(modelo, packs, tools)`): recrear un chat
+  es local y no gasta tokens, pero tampoco se hace de más.
+- **Redes de seguridad** (un fallo del router cuesta un turno, no una función):
+  1. Sin pack reconocido → solo núcleo (abrir apps, navegar, buscar, volumen,
+     sistema).
+  2. `_should_retry_with_full_tools()`: si el turno no tenía pack y el modelo
+     contesta "no puedo / no tengo..." → se reintenta el MISMO turno con las 53
+     tools (`_switch_to_full_tools`). Desactivable con
+     `llm.routing.full_tools_on_unknown=false`.
+  3. `_try_fallback()` usa `llm.fallback_models` (ya no una lista hardcodeada) y,
+     con `escalate_on_failure=true`, prueba primero el modelo fuerte.
+  4. `llm.routing.enabled=false` devuelve el comportamiento anterior (todas las
+     tools y todos los packs) sin tocar nada más.
+
+**Memoria con presupuesto** (`memory/context.py`): topes por sección
+(`PREFS_MAX_CHARS` 300, notas 240/400, proyectos 250, mensajes recientes 200) y
+`_clip()` que recorta preservando lo reciente. Con el pack `memory` se incluyen
+proyectos y 6 notas; sin él, 3 notas y nada de proyectos. El bloque se cachea
+120 s y se invalida con `database.memory_version()` (sube en cada
+`save_note`/`set_preference`/`create_project`/etc.), así que ya no se consulta
+SQLite 4-5 veces por turno. El fingerprint de contexto que decide recrear el
+chat es `(memory_version, db_path)` — la fecha/hora ya no lo invalidan.
+
+**Registro para análisis** (`utils/turn_log.py` → `logs/turns.jsonl`, una línea
+JSON por turno, activo con `logging.turn_log`): `ts`, `channel`
+(`voice`/`chat`), `text` (300 chars), `packs`, `tier`, `reason`, `model`,
+`tools`, `iterations`, `escalated`, `latency_ms`, `ok`, `finish_reason` y
+`tokens`. Los logs de texto de siempre (`logs/jarvis.log`) se conservan tal
+cual: esto es aditivo. Con unos cientos de turnos se puede medir qué packs
+fallan, qué tier se queda corto y entrenar un clasificador real (o automatizar
+el `tier`/`packs` con datos en vez de keywords). `logging.log_token_usage`
+registra el consumo de tokens de cada llamada.
 
 ## Visión de pantalla + control de teclado/ratón (implementado)
 
@@ -263,6 +333,7 @@ JARVIS no programa por su cuenta: **delega en OpenCode**, que expone un servidor
 - **Auto-arranque**: si nadie escucha en `opencode.port` (4096) y `opencode.auto_start` es true, JARVIS lanza `opencode serve --port 4096 --hostname 127.0.0.1` con `CREATE_NO_WINDOW` (nada de ventanas negras bajo `pythonw`) y logs en `logs/opencode_server.log`. Si el puerto lo ocupa un servidor con OTRO password, el error lo dice explícitamente en vez de hacer timeout.
 - **Permisos**: la sesión se crea con `permissions: [{action:"*", resource:"*", effect:"allow"}]` para que el agente no se quede esperando aprobación en cada archivo (el usuario pidió que trabaje solo). `opencode.permissions: "ask"` quita ese ruleset y deja que OpenCode consulte.
 - **Modelo**: `opencode.model` = `proveedor/modelo` (`opencode/big-pickle` por defecto). Se corta por el **primer** `/` para que funcionen ids anidados (`openrouter/anthropic/claude-sonnet-5`). OJO: el modelo por defecto del `serve` de esta PC era `openai/gpt-6.1-terra` por OpenRouter y devolvía `provider.auth: API key expired` — de ahí que el modelo sea explícito.
+- **Respaldo (cadena de fallbacks)**: `opencode.fallback_models` (lista, en orden): `["opencode/beam-free", "nvidia/z-ai/glm-5.3"]`. Si el modelo principal falla por disponibilidad (p. ej. `big-pickle` alcanza el límite free con `provider.free-limit` 429), JARVIS reintenta la tarea con el fallback 1 (`beam-free`) y si ese también falla, con el fallback 2 (GLM-5.3 de NVIDIA, API key ya configurada en `auth.json`); reporta `fallback_used: true`. `opencode.fallback_model` (string) sigue funcionando por compatibilidad y es el primer respaldo de la lista. El fallback se dispara ante errores de modelo/proveedor/disponibilidad (no ante errores de código o de red). OJO: la variante `#thinking` de NVIDIA (`nvidia/z-ai/glm-5.3#thinking`) da `provider.no-route` verificada en producción — usar el modelo SIN variante.
 - **Tools nuevas** (49 en total): `opencode_code(task, directory, background)`, `opencode_result(session_id, wait_seconds)`, `opencode_sessions(limit)` y `opencode_mcp(action, server, url, command)`. Riesgos: `opencode_code` y `opencode_mcp` son `moderate` (auto en este proyecto), las de lectura `safe`. Para que pida confirmación por voz, subirlas a `dangerous`.
 - **Tareas largas**: `opencode_code` bloquea hasta `opencode.wait_timeout` (240 s). Si se agota devuelve `status: "running"` + `session_id` y Gemini sigue con `opencode_result`; con `background=true` vuelve al instante. Mientras corre, JARVIS está en estado `processing` (no hay interrupción por voz en ese estado).
 - **MCP**: `opencode_mcp` usa `GET /api/mcp` y `/api/experimental/mcp/{server}` (PUT/DELETE, `connect`/`disconnect`). Acepta `directory` y lo manda como `location[directory]` (deepObject), porque los MCP se resuelven por *location*: listar sin `directory` muestra los del cwd del `serve`, que es la carpeta del proyecto JARVIS.
@@ -271,6 +342,20 @@ JARVIS no programa por su cuenta: **delega en OpenCode**, que expone un servidor
 - **Cierre**: `stop_server()` solo mata el proceso si `opencode.shutdown_on_exit=true`. Por defecto queda vivo: el próximo JARVIS lo reutiliza sin pagar el arranque (~5 s) y el password está en `logs/.opencode_password`.
 - **GitHub**: se usa el **MCP `github`** que ya está configurado en OpenCode (autenticado con la cuenta del usuario). En `task` hay que pedirle explícitamente "usa el servidor MCP 'github'" (herramientas `create_repository`, `create_or_update_file`, `create_pull_request`...), NO `gh` ni comandos de terminal. Regla en el `SYSTEM_PROMPT`: si el usuario no dice público/privado, el repo se crea **privado**. Verificado E2E: "crea un repositorio privado jarvis-e2e-mcp" → repo creado en 18 s. OJO: `gh` (GitHub CLI) **no está instalado** y el MSI de winget pide UAC (falla con código 1602 si se cancela); no hace falta para nada de esto. Los repos **locales** (`git init` + commit) siguen funcionando sin nada extra.
 - **Verificado**: proyecto multi-archivo y repo git local creados por OpenCode en 9-30 s; foto/archivos y `files_changed` devueltos correctamente; `opencode_mcp list` ve context7, github, playwright, supabase y testsprite.
+
+## Interfaz (GUI)
+
+Rediseño completo (octubre 2026) con fondo único `#0a0a1a` en toda la ventana:
+
+- **Arriba a la izquierda**: `J.A.R.V.I.S.` en celeste (`gui/header.py`).
+- **Panel PENDIENTES** debajo (`gui/tasks.py`): total de subtareas del turno en celeste; filas blancas pendientes, tiempo en naranja mientras corre y en verde con `✔` al terminar. Los segundos suben segundo a segundo. El turno empieza con `Interpretar la orden`; después se agregan los pasos del plan (`show_plan`) o, si Gemini no lo declara, las tools reales traducidas en `brain/tool_labels.py`.
+- **Centro**: leyenda `MANTÉN ESPACIO O EL ORBE PARA HABLAR` (celeste). Mantener ESPACIO o el clic izquierdo sobre el orbe = push-to-talk (`gui/app.py` → `JARVIS.start_listening(push_to_talk=True)`: NO corta por silencio, corta al soltar o al tope `voice.push_to_talk_max_seconds`=60 s). Mientras se mantiene, la leyenda cambia a `ESCUCHANDO… SUELTA PARA ENVIAR`.
+- **Arriba a la derecha**: hora 12 h con AM/PM pequeño y debajo `MIÉ, 07 OCT`; debajo el cuadrito `MODELO / ESTADO / TIEMPO TURNO` (claves celeste, valores blancos). El modelo se lee de `jarvis.get_model()` (refleja fallbacks) y el tiempo de turno corre de `processing` a `idle`.
+- **Subtítulos abajo** (`gui/subtitles.py`): `TÚ >` en celeste + texto verde, `JARVIS >` en celeste + texto blanco; entran abajo, suben y se desvanecen (~7 s + fundido de 2 s), máximo 3 líneas.
+- El orbe (`gui/call_view.py`) no cambió de dibujo ni de colores de estado, solo se le añadieron los bindings de press/release y la leyenda inferior ahora menciona los atajos (ya no hay botones).
+- Se eliminaron la barra de nivel de voz y los botones inferiores (JARVIS / TERMINE / STOP). La parada de emergencia sigue existiendo por código (`jarvis.emergency_stop`). El atajo `Ctrl+Alt+Shift+J` (una consulta) y el ESPACIO manteniendo en la GUI siguen igual.
+- Todos los métodos públicos de la GUI se marshalean al hilo principal con `after(0, ...)`; antes `set_state`/`add_message` se llamaban desde hilos de trabajo tocando Tkinter.
+- Eventos de subtareas: `brain/gemini.py` emite `turn_start` / `plan` / `task_start` / `task_done` / `turn_end` por `set_task_callback`; `core/jarvis.py` los reenvía por `set_callbacks(on_task=...)`. El cerebro de Telegram no registra callback, así que su chat no se afecta.
 
 ## Ejecución y Autoarranque
 

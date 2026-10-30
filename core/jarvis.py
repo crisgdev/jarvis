@@ -95,23 +95,42 @@ class JARVIS:
         self._running = False
         self._lock = threading.Lock()
         self._call_active = False
+        self._push_to_talk = False
+        self._ptt_wanted = False
 
         self._on_state_change = None
         self._on_message = None
         self._on_audio_level = None
         self._on_confirmation = None
         self._on_call_active = None
+        self._on_task = None
+
+        self._brain.set_task_callback(self._emit_task)
 
         start_session()
         threading.Thread(target=preload_stt, daemon=True).start()
         logger.info("JARVIS inicializado")
 
-    def set_callbacks(self, on_state_change=None, on_message=None, on_audio_level=None, on_confirmation=None, on_call_active=None):
+    def set_callbacks(self, on_state_change=None, on_message=None, on_audio_level=None, on_confirmation=None, on_call_active=None, on_task=None):
         self._on_state_change = on_state_change
         self._on_message = on_message
         self._on_audio_level = on_audio_level
         self._on_confirmation = on_confirmation
         self._on_call_active = on_call_active
+        self._on_task = on_task
+
+    def get_model(self) -> str:
+        """Modelo que esta usando el cerebro ahora mismo (puede cambiar por fallback)."""
+        return getattr(self._brain, "model", "") or ""
+
+    def _emit_task(self, event: dict):
+        """Reenvia a la GUI los eventos de subtareas del cerebro."""
+        if self._on_task is None:
+            return
+        try:
+            self._on_task(event)
+        except Exception as e:
+            logger.debug("Error en callback de tareas: %s", e)
 
     def is_call_active(self) -> bool:
         return self._call_active
@@ -251,20 +270,53 @@ class JARVIS:
             finally:
                 self._set_state(State.IDLE)
 
-    def start_listening(self):
+    def start_listening(self, push_to_talk: bool = False):
+        self._ptt_wanted = bool(push_to_talk)
+
+        # Push-to-talk encima del habla: corta el TTS y espera (en segundo
+        # plano, sin congelar la GUI) a que el hilo de respuesta vuelva a IDLE.
+        if self.state == State.SPEAKING:
+            self.interrupt_speaking()
+            threading.Thread(
+                target=self._listen_when_idle, args=(push_to_talk,), daemon=True
+            ).start()
+            return
+
+        self._begin_listening(push_to_talk)
+
+    def _listen_when_idle(self, push_to_talk: bool):
+        deadline = time.time() + 3.0
+        while self.state != State.IDLE and time.time() < deadline:
+            if push_to_talk and not self._ptt_wanted:
+                return
+            time.sleep(0.05)
+        if push_to_talk and not self._ptt_wanted:
+            return
+        self._begin_listening(push_to_talk)
+
+    def _begin_listening(self, push_to_talk: bool):
         if self.state != State.IDLE:
             return
 
         with self._lock:
             self._set_state(State.LISTENING)
+            self._push_to_talk = bool(push_to_talk)
             try:
                 start_recording()
             except Exception as e:
                 logger.error("Error iniciando grabacion: %s", e)
+                self._push_to_talk = False
                 self._set_state(State.IDLE)
                 return
 
         threading.Thread(target=self._watch_recording, daemon=True).start()
+
+    def interrupt_speaking(self):
+        """Corta la voz de JARVIS para que el usuario hable encima."""
+        if not is_speaking():
+            return
+        logger.info("Interrupcion por push-to-talk: cortando TTS")
+        stop_speech()
 
     def _watch_recording(self):
         """Corta la grabacion de una consulta unica al detectar silencio (o tope).
@@ -272,12 +324,25 @@ class JARVIS:
         Sin esto, una escucha iniciada con start_listening() (hotkey una
         consulta, boton de la GUI) dejaria grabando por siempre: el poll de
         silencio solo lo hacian el call loop y las confirmaciones de voz.
+
+        En push-to-talk (mantener ESPACIO o el orbe) NO se corta por silencio:
+        manda el usuario al soltar, para poder pensar una pausa sin que se
+        cierre el microfono.
         """
         start_time = time.time()
         max_seconds = get_max_record_seconds()
+        ptt_max = float(
+            get_config().get("voice", {}).get("push_to_talk_max_seconds", 60)
+        )
         while self.state == State.LISTENING and is_recording():
             try:
-                if is_silence_detected():
+                if not self._push_to_talk and is_silence_detected():
+                    break
+                if self._push_to_talk and not self._ptt_wanted:
+                    # El usuario solto ESPACIO / el orbe antes de empezar.
+                    break
+                if self._push_to_talk and ptt_max > 0 and time.time() - start_time > ptt_max:
+                    logger.warning("Push-to-talk llego al tope (%.0fs): cortando", ptt_max)
                     break
                 if max_seconds > 0 and time.time() - start_time > max_seconds:
                     break
@@ -285,7 +350,12 @@ class JARVIS:
                 logger.error("Error vigilando grabacion: %s", e)
                 break
             time.sleep(0.1)
-        if self.state == State.LISTENING:
+        if self.state == State.LISTENING and not self._push_to_talk:
+            # Solo el flujo no-PTT (hotkey Ctrl+Alt+Shift+J) llega aqu�:
+            # detecto silencio o tope de tiempo y paso a procesar.
+            # Para PTT (ESPACIO / orbe) es _ptt_release quien llama a
+            # stop_listening(), as� evitamos condiciones de carrera entre
+            # este hilo y el hilo de la GUI.
             self.stop_listening()
 
     def on_double_clap(self):
@@ -313,9 +383,16 @@ class JARVIS:
         threading.Thread(target=_run, daemon=True).start()
 
     def stop_listening(self):
+        self._ptt_wanted = False
         if self.state != State.LISTENING:
             return
+        # Guardia contra doble ejecucion: si otro hilo (ej. _watch_recording)
+        # ya detuvo la grabacion, no re-procesar (evita que el segundo intento
+        # reciba None de stop_recording y sobrescriba PROCESSING con IDLE).
+        if not is_recording():
+            return
 
+        self._push_to_talk = False
         audio = stop_recording()
         if audio is None or len(audio) < 1600:
             logger.info("Audio muy corto, ignorando")
@@ -325,6 +402,16 @@ class JARVIS:
         self._set_state(State.PROCESSING)
         thread = threading.Thread(target=self._process_audio_thread, args=(audio,), daemon=True)
         thread.start()
+
+    def cancel_listening(self):
+        """Cancela una escucha push-to-talk demasiado corta (clic accidental)."""
+        self._ptt_wanted = False
+        if self.state != State.LISTENING:
+            return
+        self._push_to_talk = False
+        if is_recording():
+            stop_recording()
+        self._set_state(State.IDLE)
 
     def _process_audio_thread(self, audio):
         t0 = time.perf_counter()
@@ -394,19 +481,13 @@ class JARVIS:
 
     def stop_call(self):
         self._set_call_active(False)
+        self._push_to_talk = False
         if is_recording():
             stop_recording()
         if is_speaking():
             stop_speech()
         self._set_state(State.IDLE)
         logger.info("Llamada terminada")
-
-    def toggle_conversation(self):
-        if self._call_active:
-            self.stop_call()
-            speak("Conversacion pausada")
-        else:
-            self.start_call()
 
     def force_process(self):
         """Boton TERMINE: corta la grabacion aunque no se haya detectado
@@ -569,6 +650,7 @@ class JARVIS:
 
     def emergency_stop(self):
         self._set_call_active(False)
+        self._push_to_talk = False
         stop_speech()
         if is_recording():
             stop_recording()

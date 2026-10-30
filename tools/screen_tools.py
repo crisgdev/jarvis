@@ -15,6 +15,10 @@ from config import get_config
 
 logger = logging.getLogger("jarvis.tools.screen")
 
+# Ultima captura: permite convertir coordenadas de la imagen (lo que ve Gemini)
+# a coordenadas reales de pantalla en tools de raton/teclado.
+_LAST_SCREENSHOT = None
+
 try:
     from PIL import Image, ImageGrab
 except ImportError:  # pragma: no cover
@@ -104,6 +108,7 @@ def _take_screenshot(region: str = None, max_width: int = None) -> dict:
             image = image.crop((x, y, x + w, y + h))
 
         original_size = image.size
+        crop_box = box  # None si es pantalla completa
         image, quality = _prepare_image(image, max_width)
 
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -113,6 +118,23 @@ def _take_screenshot(region: str = None, max_width: int = None) -> dict:
         _prune_old(out_dir)
 
         logger.info("Captura guardada: %s (%s)", path, image.size)
+        global _LAST_SCREENSHOT
+        import time as _t
+        origin_x = 0
+        origin_y = 0
+        if crop_box:
+            origin_x, origin_y = crop_box[0], crop_box[1]
+        _LAST_SCREENSHOT = {
+            "image_w": image.size[0],
+            "image_h": image.size[1],
+            "screen_w": original_size[0],
+            "screen_h": original_size[1],
+            "origin_x": origin_x,
+            "origin_y": origin_y,
+            "scale_x": (original_size[0] / image.size[0]) if image.size[0] else 1.0,
+            "scale_y": (original_size[1] / image.size[1]) if image.size[1] else 1.0,
+            "timestamp": _t.time(),
+        }
         return {
             "status": "success",
             "image_path": str(path),

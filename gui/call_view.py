@@ -1,39 +1,53 @@
 import math
+import random
+
 import customtkinter as ctk
+
+from gui import theme
 
 
 class CallView(ctk.CTkFrame):
-    def __init__(self, master, **kwargs):
-        super().__init__(master, fg_color="#0a0a1a", corner_radius=0, **kwargs)
+    def __init__(self, master, on_press=None, on_release=None, **kwargs):
+        super().__init__(master, fg_color=theme.BG, corner_radius=0, **kwargs)
 
         self._anim_running = False
         self._audio_level = 0.0
         self._state = "idle"
         self._angle = 0
         self._particles = []
+        self._on_press = on_press
+        self._on_release = on_release
 
         self._build_ui()
+        self._bind_hold()
         self.set_state("idle")
+
+    def _bind_hold(self):
+        """Mantener pulsado el orbe = push-to-talk (igual que ESPACIO)."""
+        for widget in (self._canvas, self._state_label):
+            widget.bind("<ButtonPress-1>", self._handle_press, add="+")
+            widget.bind("<ButtonRelease-1>", self._handle_release, add="+")
+
+    def _handle_press(self, _event=None):
+        if self._on_press is not None:
+            self._on_press()
+
+    def _handle_release(self, _event=None):
+        if self._on_release is not None:
+            self._on_release()
 
     def _build_ui(self):
         self._canvas = ctk.CTkCanvas(
-            self, bg="#0a0a1a", highlightthickness=0,
+            self, bg=theme.BG, highlightthickness=0, cursor="hand2",
         )
         self._canvas.pack(fill="both", expand=True)
 
         self._state_label = ctk.CTkLabel(
             self, text="LISTO",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color="#2ecc71",
+            font=theme.font(18, "bold"),
+            text_color=theme.GREEN,
         )
-        self._state_label.place(relx=0.5, rely=0.85, anchor="center")
-
-        self._hint_label = ctk.CTkLabel(
-            self, text="Ctrl+Shift+J o \u23f9 para colgar   |   TERMINE procesa ahora",
-            font=ctk.CTkFont(size=11),
-            text_color="#555555",
-        )
-        self._hint_label.place(relx=0.5, rely=0.92, anchor="center")
+        self._state_label.place(relx=0.5, rely=0.88, anchor="center")
 
     def start_animation(self):
         self._anim_running = True
@@ -45,8 +59,8 @@ class CallView(ctk.CTkFrame):
     def set_state(self, state: str):
         self._state = state
         colors = {
-            "listening": "#2ecc71",
-            "processing": "#f39c12",
+            "listening": theme.GREEN,
+            "processing": theme.ORANGE,
             "speaking": "#3498db",
         }
         color = colors.get(state, "#7f8c8d")
@@ -74,7 +88,13 @@ class CallView(ctk.CTkFrame):
             self.after(30, self._animate)
             return
 
-        cx, cy = w // 2, h // 2 - 30
+        # Esfera centrada y un poco por debajo del centro: la leyenda de
+        # estado vive abajo y asi hay aire entre el orbe y el borde superior.
+        cx, cy = w // 2, h // 2 + 10
+        # El orbe acompaña el tamano de la ventana pero con topes, para que
+        # nunca se salga del lienzo en la ventana minima ni quede diminuto
+        # en pantalla completa. Referencia: 488 px de alto en 900x700.
+        self._k = max(0.62, min(1.35, min(w, h) / 488.0))
         self._angle += 0.03
 
         state_colors = {
@@ -90,52 +110,20 @@ class CallView(ctk.CTkFrame):
         self._draw_orb(cx, cy, base_rgb, level)
         self._draw_particles(cx, cy, w, h, base_rgb, level)
         self._draw_rings_outer(cx, cy, base_rgb, level)
-        self._draw_level_strip(w, h, base_rgb)
 
         self.after(33, self._animate)
 
-    def _draw_level_strip(self, w, h, base_rgb):
-        bar_h = 10
-        bar_w = min(w * 0.5, 320)
-        x0 = (w - bar_w) / 2
-        y0 = h - 78
-        y1 = y0 + bar_h
-
-        def lerp(c1, c2, t):
-            t = max(0.0, min(1.0, t))
-            return tuple(int(round(a + (b - a) * t)) for a, b in zip(c1, c2))
-
-        def hexc(t):
-            return f"#{t[0]:02x}{t[1]:02x}{t[2]:02x}"
-
-        green, amber, red = (46, 204, 113), (243, 156, 18), (231, 76, 60)
-
-        self._canvas.create_rectangle(x0, y0, x0 + bar_w, y1, fill="#0d1117", outline="#30363d")
-
-        thr_x = x0 + bar_w * 0.15
-        self._canvas.create_line(thr_x, y0 - 2, thr_x, y1 + 2, fill="#ffffff", width=2)
-
-        level = max(0.0, min(1.0, self._audio_level / 100.0))
-        if level > 0.01:
-            ratio = level * 0.95
-            if ratio < 0.5:
-                col = lerp(green, amber, ratio / 0.5)
-            else:
-                col = lerp(amber, red, (ratio - 0.5) / 0.5)
-            fill_w = bar_w * level
-            self._canvas.create_rectangle(x0, y0, x0 + fill_w, y1, fill=hexc(col), outline="")
-            self._canvas.create_rectangle(x0, y0 - 1, x0 + fill_w, y0, fill=hexc(tuple(min(255, c + 60) for c in col)))
-
     def _draw_rings(self, cx, cy, base_rgb, level):
+        k = getattr(self, "_k", 1.0)
         for i in range(3):
-            r = 60 + i * 25 + level * 20
+            r = (76 + i * 28 + level * 22) * k
             alpha = max(0.05, 0.2 - i * 0.06 - level * 0.05)
             r_c = min(255, int(base_rgb[0] * alpha + 40))
             g_c = min(255, int(base_rgb[1] * alpha + 40))
             b_c = min(255, int(base_rgb[2] * alpha + 40))
             color = f"#{r_c:02x}{g_c:02x}{b_c:02x}"
 
-            wobble = math.sin(self._angle + i * 0.8) * 3
+            wobble = math.sin(self._angle + i * 0.8) * 3 * k
             self._canvas.create_oval(
                 cx - r + wobble, cy - r - wobble,
                 cx + r + wobble, cy + r - wobble,
@@ -143,9 +131,9 @@ class CallView(ctk.CTkFrame):
             )
 
     def _draw_rings_outer(self, cx, cy, base_rgb, level):
+        k = getattr(self, "_k", 1.0)
         for i in range(2):
-            r = 140 + i * 30 + level * 30
-            dash_offset = self._angle * 20 + i * 40
+            r = (168 + i * 34 + level * 32) * k
             alpha = max(0.03, 0.1 - i * 0.03)
             r_c = min(255, int(base_rgb[0] * alpha + 30))
             g_c = min(255, int(base_rgb[1] * alpha + 30))
@@ -158,10 +146,11 @@ class CallView(ctk.CTkFrame):
             )
 
     def _draw_orb(self, cx, cy, base_rgb, level):
-        pulse = 40 + level * 25 + math.sin(self._angle * 2) * 5
+        k = getattr(self, "_k", 1.0)
+        pulse = (52 + level * 28 + math.sin(self._angle * 2) * 6) * k
 
         for i in range(5, 0, -1):
-            r = pulse + i * 8
+            r = pulse + i * 9 * k
             fade = max(0.02, 0.08 - i * 0.015)
             r_c = min(255, int(base_rgb[0] * fade + 20))
             g_c = min(255, int(base_rgb[1] * fade + 20))
@@ -192,14 +181,14 @@ class CallView(ctk.CTkFrame):
         )
 
     def _draw_particles(self, cx, cy, w, h, base_rgb, level):
-        import random
+        k = getattr(self, "_k", 1.0)
         num_particles = int(8 + level * 15)
 
         random.seed(int(self._angle * 10) % 100)
 
         for _ in range(num_particles):
             angle = random.uniform(0, 2 * math.pi)
-            dist = random.uniform(80, min(w, h) * 0.4)
+            dist = random.uniform(100 * k, min(w, h) * 0.44)
             px = cx + math.cos(angle + self._angle * 0.5) * dist
             py = cy + math.sin(angle + self._angle * 0.5) * dist
             size = random.uniform(1, 3)

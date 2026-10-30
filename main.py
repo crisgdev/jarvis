@@ -132,18 +132,18 @@ def main():
         else:
             jarvis.stop_listening()
 
-    def on_call_toggle(active):
-        if active:
-            jarvis.start_call()
-            app.after(100, on_audio_level)
-        else:
-            jarvis.stop_call()
-
     def on_emergency():
         jarvis.emergency_stop()
 
     def on_call_active(active):
         app.after(0, lambda: app.set_call_active(active))
+
+    def on_task(event):
+        app.add_task_event(event)
+
+    def on_ptt_start():
+        jarvis.start_listening(push_to_talk=True)
+        app.after(100, on_audio_level)
 
     def on_confirmation(tool_name, args):
         title, _message = confirmation_request(tool_name, args)
@@ -157,20 +157,22 @@ def main():
         on_message=on_message,
         on_confirmation=on_confirmation,
         on_call_active=on_call_active,
+        on_task=on_task,
     )
     app.set_state(jarvis.state.value)
     app.set_call_active(jarvis.is_call_active())
+    app.set_model_provider(jarvis.get_model)
     app.on_user_message(on_user_message)
     app.on_mic_toggle(on_mic_toggle)
-    app.on_call_toggle(on_call_toggle)
     app.on_emergency(on_emergency)
     app.on_force_process(jarvis.force_process)
+    app.on_ptt_start(on_ptt_start)
+    app.on_ptt_stop(jarvis.stop_listening)
+    app.on_ptt_cancel(jarvis.cancel_listening)
+    app.on_ptt_interrupt(jarvis.interrupt_speaking)
 
     from services import wake_word
-    wake_word.start_listening(
-        jarvis.toggle_conversation,
-        once_callback=jarvis.start_listening,
-    )
+    wake_word.start_listening(jarvis.start_listening)
 
     # Detector de doble palmada (activa JARVIS con un aplauso)
     clap_enabled = bool(get_setting("voice", "clap_enabled", False))
@@ -178,7 +180,18 @@ def main():
         try:
             from services import clap_detector
 
-            if clap_detector.start_clap_listener(jarvis.on_double_clap):
+            def _on_double_clap():
+                # Mostrar la GUI si está oculta (bandeja) o minimizada, y traerla al frente
+                try:
+                    app.after(0, lambda: (app.deiconify(), app.lift(), app._take_focus()))
+                except Exception as e:
+                    logger.warning("No se pudo mostrar la GUI tras doble palmada: %s", e)
+                try:
+                    jarvis.on_double_clap()
+                except Exception as e:
+                    logger.warning("Error en on_double_clap: %s", e)
+
+            if clap_detector.start_clap_listener(_on_double_clap):
                 logger.info("Detector de palmadas activo")
             else:
                 logger.info("Detector de palmadas desactivado por config")

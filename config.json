@@ -1,14 +1,28 @@
 {
     "voice": {
         "language": "es",
-        "tts_voice": "es-MX-DaliaNeural",
-        "stt_model": "small",
+        "tts_voice": "es-US-AlonsoNeural",
+        "stt_model": "base",
+        "stt_cpu_threads": 6,
         "stt_beam_size": 1,
         "stt_temperature": 0,
         "stt_initial_prompt": "Hola JARVIS, abre google, abre youtube, dime la hora, cual es la fecha, reproduce musica, envia un correo, crea un evento, recuerda que, gracias",
-        "activation_key": "ctrl+shift+j",
+        "stt_hotwords": [
+            "JARVIS",
+            "Cristopher",
+            "OpenCode",
+            "Gmail",
+            "YouTube",
+            "Spotify",
+            "GitHub",
+            "VS Code",
+            "Instagram",
+            "WhatsApp",
+            "Telegram"
+        ],
         "once_key": "ctrl+alt+shift+j",
         "auto_start": false,
+        "push_to_talk_max_seconds": 60,
         "confirm_timeout": 10,
         "interrupt_enabled": true,
         "interrupt_threshold": 1500,
@@ -18,13 +32,34 @@
         "clap_double_window_min": 0.12,
         "clap_double_window_max": 0.9,
         "clap_cooldown": 2.5,
-        "clap_greeting": "Hola, en qué te ayudo"
+        "clap_greeting": "Hola, en quǸ te ayudo"
     },
     "llm": {
         "model": "gemini-3.5-flash-lite",
-        "max_history_turns": 8,
+        "thinking_budget": 0,
+        "max_history_turns": 12,
         "max_output_tokens": 1024,
-        "temperature": 0.7
+        "temperature": 0.7,
+        "fallback_models": [
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-flash-lite-latest"
+        ],
+        "routing": {
+            "enabled": true,
+            "fast_model": "gemini-3.5-flash-lite",
+            "strong_model": "gemini-3.6-flash",
+            "fast_history_turns": 6,
+            "strong_history_turns": 12,
+            "escalate_on_failure": true,
+            "full_tools_on_unknown": true
+        }
+    },
+    "logging": {
+        "turn_log": true,
+        "turn_log_path": "logs/turns.jsonl",
+        "log_token_usage": true
     },
     "memory": {
         "enabled": true,
@@ -50,7 +85,7 @@
         "sample_rate": 16000,
         "max_record_seconds": 0,
         "silence_threshold": 500,
-        "silence_timeout": 2.0,
+        "silence_timeout": 1.2,
         "safety_max_seconds": 45
     },
     "browser": {
@@ -62,7 +97,11 @@
         "screenshot_dir": "logs/screenshots",
         "max_image_width": 1280,
         "jpeg_quality": 75,
-        "type_delay": 0.02
+        "type_delay": 0.02,
+        "mouse_move_duration": 0.15,
+        "scroll_lines_per_unit": 3,
+        "click_settle_ms": 50,
+        "opencode_input_click_offset": 55
     },
     "opencode": {
         "enabled": true,
@@ -71,6 +110,11 @@
         "username": "opencode",
         "password": "",
         "model": "opencode/big-pickle",
+        "fallback_model": "opencode/beam-free",
+        "fallback_models": [
+            "opencode/beam-free",
+            "nvidia/z-ai/glm-5.3"
+        ],
         "directory": "",
         "auto_start": true,
         "permissions": "allow",
@@ -83,6 +127,9 @@
         "enabled": true,
         "response_style": "markdown",
         "confirm_timeout": 60
+    },
+    "paths": {
+        "extra_project_roots": []
     },
     "power": {
         "shutdown_mode": "sleep"

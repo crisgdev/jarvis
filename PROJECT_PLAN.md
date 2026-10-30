@@ -208,7 +208,7 @@ Funciones CRUD para cada tabla.
 
 ### 4.4 `services/wake_word.py` (Futuro)
 - Placeholder para openWakeWord
-- Por ahora: activacion por Ctrl+Shift+J con la libreria `keyboard`
+- Por ahora: activacion por Ctrl+Alt+Shift+J con la libreria `keyboard`
 
 ---
 
@@ -245,7 +245,7 @@ Estados: IDLE -> LISTENING -> PROCESSING -> SPEAKING -> IDLE
 ```
 
 Flujo:
-1. Esperar activacion (Ctrl+Shift+J)
+1. Esperar activacion (Ctrl+Alt+Shift+J)
 2. Capturar audio del microfono
 3. Transcribir con faster-whisper
 4. Enviar a Gemini con tools
@@ -287,7 +287,8 @@ Sistema de eventos proactivos en background thread:
         "language": "es",
         "tts_voice": "es-MX-DaliaNeural",
         "stt_model": "small",
-        "activation_key": "ctrl+shift+j"
+        "activation_key": "ctrl+alt+shift+j",
+        "once_key": "ctrl+alt+shift+j",
     },
     "llm": {
         "model": "gemini-1.5-flash",

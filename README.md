@@ -10,7 +10,7 @@ JARVIS es un asistente de voz personal en Python, inspirado en el JARVIS de Iron
 | IA / Cerebro | Google Gemini API (Flash) | ✅ |
 | Speech-to-Text | faster-whisper (small/turbo/medium/large-v3) | ✅ |
 | Text-to-Speech | edge-tts (neural, español) | ✅ |
-| Activación | Ctrl+Alt+Shift+J (una consulta) + Ctrl+Shift+J (modo llamada) + bandeja del sistema | ✅ |
+| Activación | Ctrl+Alt+Shift+J (una consulta) + ESPACIO manteniendo (push-to-talk en la GUI) + bandeja del sistema | ✅ |
 | GUI | CustomTkinter | ✅ |
 | Memoria | SQLite (persistente) + búsqueda semántica opcional (ChromaDB) | ✅ |
 | Navegador | webbrowser + duckduckgo-search (sin Playwright) | ✅ |
@@ -77,7 +77,7 @@ python main.py --telegram-only
 
 Hotkeys:
 - `Ctrl+Alt+Shift+J` → una consulta por voz
-- `Ctrl+Shift+J` → alternar modo llamada (conversación continua)
+- `ESPACIO` (manteniendo en la GUI) → push-to-talk: hablar mientras se suelta
 
 ## Tools disponibles para Gemini
 

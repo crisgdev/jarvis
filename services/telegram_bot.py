@@ -18,6 +18,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from telegram.constants import ChatAction
+
 from config import get_env, get_setting
 
 logger = logging.getLogger("jarvis.telegram")
@@ -33,6 +35,9 @@ _brains_lock = threading.Lock()
 _chat_locks: dict[int, threading.Lock] = {}
 _confirm_state: dict[int, dict] = {}
 _confirm_lock = threading.Lock()
+
+_typing_stops: dict[int, threading.Event] = {}
+_typing_lock = threading.Lock()
 
 
 def _get_token() -> str:
@@ -56,6 +61,41 @@ def is_configured() -> bool:
 
 def is_running() -> bool:
     return _running
+
+
+def _start_typing(chat_id: int) -> threading.Event:
+    """Lanza un hilo que envia la accion 'typing' a Telegram cada 4s.
+
+    Devuelve el Event para detenerlo.
+    """
+    stop = threading.Event()
+    with _typing_lock:
+        prev = _typing_stops.pop(chat_id, None)
+        if prev is not None:
+            prev.set()
+        _typing_stops[chat_id] = stop
+
+    def worker():
+        while not stop.is_set():
+            try:
+                if _loop is not None and _application is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        _application.bot.send_chat_action(
+                            chat_id=chat_id, action=ChatAction.TYPING
+                        ),
+                        _loop,
+                    )
+            except Exception:
+                pass
+            stop.wait(4.0)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return stop
+
+
+def _stop_typing(stop: Optional[threading.Event]):
+    if stop is not None:
+        stop.set()
 
 
 def start_telegram_bot():
@@ -213,6 +253,13 @@ async def _on_message(update, context):
     chat_id = msg.chat_id
     logger.info("Telegram [%s]: %s", chat_id, text[:100])
 
+    # Acuse de recibo inmediato: que el usuario vea que JARVIS recibio el
+    # mensaje aunque el procesamiento tarde.
+    try:
+        await update.effective_chat.send_action(ChatAction.TYPING)
+    except Exception:
+        pass
+
     thread = threading.Thread(
         target=_process_for, args=(chat_id, text), daemon=True
     )
@@ -239,6 +286,11 @@ async def _on_voice(update, context):
     file_id = media.file_id
     logger.info("Telegram [%s]: nota de voz (%.1fs)", chat_id, getattr(media, "duration", 0) or 0)
 
+    try:
+        await update.effective_chat.send_action(ChatAction.TYPING)
+    except Exception:
+        pass
+
     tmp_dir = Path(tempfile.gettempdir()) / "jarvis_telegram"
     tmp_dir.mkdir(exist_ok=True)
     path = tmp_dir / f"voice_{chat_id}_{uuid.uuid4().hex[:8]}.ogg"
@@ -260,6 +312,7 @@ async def _on_voice(update, context):
 def _process_voice_for(chat_id: int, filepath: str):
     from services.stt import transcribe_file
 
+    typing_stop = _start_typing(chat_id)
     try:
         t0 = time.perf_counter()
         text = transcribe_file(filepath)
@@ -278,6 +331,7 @@ def _process_voice_for(chat_id: int, filepath: str):
         logger.exception("Error procesando audio de Telegram")
         _reply(chat_id, f"Tuve un error procesando tu audio: {e}")
     finally:
+        _stop_typing(typing_stop)
         try:
             Path(filepath).unlink(missing_ok=True)
         except Exception:
@@ -285,36 +339,61 @@ def _process_voice_for(chat_id: int, filepath: str):
 
 
 def _process_for(chat_id: int, text: str):
-    with _chat_locks.setdefault(chat_id, threading.Lock()):
-        try:
-            brain = _get_brain(chat_id)
-            from memory.context import save_conversation
-            from memory.search import store_memory
+    # Cada peticion usa su propio brain (sin lock compartido): asincronia real,
+    # las peticiones no se atan unas a otras. El estado (artifacts, exchanges)
+    # queda aislado por peticion.
+    typing_stop = _start_typing(chat_id)
+    sent_images: set[str] = set()
 
-            save_conversation("user", text)
+    try:
+        from brain.gemini import GeminiBrain
 
-            t0 = time.perf_counter()
-            response = brain.chat_message(text)
-            logger.info("LATENCIA GEMINI (telegram): %.0f ms", (time.perf_counter() - t0) * 1000)
+        brain = GeminiBrain(detailed=True)
+        brain.set_confirmation_callback(
+            lambda tool, args: _confirm_for(chat_id, tool, args)
+        )
 
-            if not response:
-                response = "No pude generar una respuesta."
+        def _on_artifact(art: dict):
+            path = art.get("path")
+            if path and path not in sent_images:
+                sent_images.add(path)
+                # Envio inmediato de la captura, sin esperar al final del turno.
+                _send_photo_now(chat_id, path, "Captura de tu PC")
 
-            save_conversation("model", response)
-            store_memory(response, source="telegram")
+        brain.set_artifact_callback(_on_artifact)
 
-            # Si el turno tomo capturas de pantalla, se envian como foto
-            # para que el usuario vea su pantalla desde el celular.
-            artifacts = list(getattr(brain, "artifacts", []) or [])
-            images = [a for a in artifacts if a.get("type") == "image"]
+        from memory.context import save_conversation
+        from memory.search import store_memory
 
-            if images:
-                _reply_with_images(chat_id, response, images)
-            else:
-                _reply(chat_id, response)
-        except Exception as e:
-            logger.exception("Error procesando mensaje de Telegram")
-            _reply(chat_id, f"Tuve un error al procesar tu mensaje: {e}")
+        save_conversation("user", text)
+
+        t0 = time.perf_counter()
+        response = brain.chat_message(text)
+        logger.info("LATENCIA GEMINI (telegram): %.0f ms", (time.perf_counter() - t0) * 1000)
+
+        if not response:
+            response = "No pude generar una respuesta."
+
+        save_conversation("model", response)
+        store_memory(response, source="telegram")
+
+        # Las capturas ya enviadas incrementalmente no se reenvian.
+        artifacts = list(getattr(brain, "artifacts", []) or [])
+        images = [
+            a
+            for a in artifacts
+            if a.get("type") == "image" and a.get("path") not in sent_images
+        ]
+
+        if images:
+            _reply_with_images(chat_id, response, images)
+        else:
+            _reply(chat_id, response)
+    except Exception as e:
+        logger.exception("Error procesando mensaje de Telegram")
+        _reply(chat_id, f"Tuve un error al procesar tu mensaje: {e}")
+    finally:
+        _stop_typing(typing_stop)
 
 
 def _get_brain(chat_id: int):
@@ -396,6 +475,18 @@ def _reply(chat_id: int, text: str):
     asyncio.run_coroutine_threadsafe(_send_reply(chat_id, text), _loop)
 
 
+def _send_photo_now(chat_id: int, path: str, caption: str):
+    """Programa el envio inmediato de una captura (sin bloquear)."""
+    if _loop is None or _application is None:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            _send_photo(chat_id, path, caption), _loop
+        )
+    except Exception as e:
+        logger.warning("Error programando envio inmediato de foto: %s", e)
+
+
 # Limite de Telegram para el pie de foto de una foto.
 _MAX_CAPTION = 1024
 
@@ -422,11 +513,10 @@ def _reply_with_images(chat_id: int, text: str, images: list[dict]):
 
 
 async def _gather(*coros):
-    for coro in coros:
-        try:
-            await coro
-        except Exception as e:
-            logger.warning("Error enviando artefacto a Telegram: %s", e)
+    try:
+        await asyncio.gather(*coros, return_exceptions=True)
+    except Exception as e:
+        logger.warning("Error enviando artefactos a Telegram: %s", e)
 
 
 async def _send_photo(chat_id: int, path: str, caption: str):

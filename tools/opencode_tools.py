@@ -112,6 +112,49 @@ def parse_model(spec: str | None) -> dict | None:
         return None
     return {"providerID": provider, "id": model_id}
 
+# Palabras que sugieren que el fallo se debe al modelo/proveedor (no al codigo
+# ni a la red), por lo que vale la pena reintentar con el modelo de respaldo.
+_MODEL_ERROR_KEYWORDS = (
+    "free usage limit",
+    "free-limit",
+    "free limit",
+    "provider.free",
+    "provider error",
+    "model",
+    "provider",
+    "unavailable",
+    "not available",
+    "not found",
+    "does not exist",
+    "no such model",
+    "expired",
+    "rate limit",
+    "rate-limit",
+    "quota",
+    "capacity",
+    "overloaded",
+    "resource exhausted",
+)
+
+
+def is_model_unavailable(exc_or_text) -> bool:
+    """True si el error parece deberse al modelo/proveedor (no al codigo/red)."""
+    status = None
+    text = ""
+    if isinstance(exc_or_text, OpenCodeError):
+        status = getattr(exc_or_text, "status", None)
+        text = str(exc_or_text)
+    elif isinstance(exc_or_text, Exception):
+        text = str(exc_or_text)
+    else:
+        text = str(exc_or_text or "")
+
+    if status is not None and status in (400, 404, 408, 429, 500, 502, 503, 504):
+        # 401/403 son de autenticacion: reintentar con otro modelo no ayuda.
+        return True
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in _MODEL_ERROR_KEYWORDS)
+
 
 def _describe_http_error(err: urllib.error.HTTPError) -> str:
     try:
@@ -149,6 +192,29 @@ class OpenCodeClient:
         self.username = str(self.cfg.get("username") or "opencode")
         self.password = resolve_password(self.cfg)
         self.model = parse_model(self.cfg.get("model"))
+        # Respaldo simple (compatibilidad): fallback_model / model_fallback.
+        primary_fallback = parse_model(
+            self.cfg.get("fallback_model")
+            or self.cfg.get("model_fallback")
+            or self.cfg.get("backup_model")
+        )
+        # Cadena de respaldos (doble/triple fallback): 'fallback_models' es
+        # una lista de specs 'proveedor/modelo' que se prueban en orden si
+        # el modelo principal (y los respaldos previos) fallan.
+        fallback_models: list[dict] = []
+        if primary_fallback:
+            fallback_models.append(primary_fallback)
+        for spec in self.cfg.get("fallback_models") or []:
+            parsed = parse_model(spec)
+            if parsed:
+                fallback_models.append(parsed)
+        # Deduplicar conservando el orden (y excluyendo el modelo principal).
+        candidates_seen: list[dict] = [self.model] if self.model else []
+        for m in fallback_models:
+            if m and m not in candidates_seen:
+                candidates_seen.append(m)
+        self.fallback_models = candidates_seen[1:]
+        self.fallback_model = self.fallback_models[0] if self.fallback_models else None
         self.default_directory = str(self.cfg.get("directory") or "")
         self.auto_start = bool(self.cfg.get("auto_start", True))
         self.approve_all = str(self.cfg.get("permissions", "allow")).lower() != "ask"
@@ -464,14 +530,80 @@ class OpenCodeClient:
             return {"status": "error", "error": "Falta la tarea a programar."}
 
         self.ensure_server()
+
+        # Candidatos de modelo: principal + cadena de respaldos (doble o mas
+        # fallbacks). La logica de reintento ya recorre la lista completa:
+        # si el modelo idx falla por disponibilidad, prueba el idx+1.
+        candidates = [self.model] if self.model else []
+        for m in getattr(self, "fallback_models", []):
+            if m and m not in candidates:
+                candidates.append(m)
+
+        last_error = None
+        last_result = None
+        for idx, chosen in enumerate(candidates):
+            is_fallback = idx > 0
+            try:
+                result = self._run_one(
+                    task, directory, timeout, background, chosen
+                )
+            except OpenCodeError as e:
+                last_error = e
+                if is_model_unavailable(e) and idx + 1 < len(candidates):
+                    logger.warning(
+                        "Modelo %s no disponible, probando respaldo %s: %s",
+                        _model_label(chosen),
+                        _model_label(candidates[idx + 1]),
+                        e,
+                    )
+                    continue
+                return {"status": "error", "error": str(e)}
+
+            last_result = result
+
+            # Si la tarea termino con error atribuible al modelo, reintentar.
+            if (
+                result.get("status") == "error"
+                and idx + 1 < len(candidates)
+                and is_model_unavailable(result.get("error"))
+            ):
+                logger.warning(
+                    "Modelo %s fallo por disponibilidad, probando respaldo %s: %s",
+                    _model_label(chosen),
+                    _model_label(candidates[idx + 1]),
+                    result.get("error"),
+                )
+                continue
+
+            if is_fallback:
+                result["fallback_used"] = True
+            return result
+
+        if last_result is not None:
+            return last_result
+        return {
+            "status": "error",
+            "error": str(last_error) if last_error else "No se pudo ejecutar la tarea.",
+        }
+
+    def _run_one(
+        self,
+        task: str,
+        directory: str | None,
+        timeout: int | None,
+        background: bool,
+        model_override: dict | None,
+    ) -> dict:
+        chosen = model_override or self.model
         target, created = self.resolve_directory(directory)
 
-        session = self.create_session(target, title=f"JARVIS: {task}")
+        session = self.create_session(target, title="JARVIS: " + task, model=chosen)
         session_id = session["id"]
         logger.info(
-            "OpenCode: tarea encolada session=%s dir=%s (%d chars)",
+            "OpenCode: tarea encolada session=%s dir=%s model=%s (%d chars)",
             session_id,
             target,
+            _model_label(chosen),
             len(task),
         )
 
@@ -484,7 +616,7 @@ class OpenCodeClient:
             "session_id": session_id,
             "directory": target,
             "created_directory": created,
-            "model": _model_label(session) or _model_label(self.model),
+            "model": _model_label(session) or _model_label(chosen),
         }
 
         if background:
@@ -721,6 +853,22 @@ def stop_server() -> None:
 def opencode_code(task: str, directory: str = "", background: bool = False) -> dict:
     """Delega una tarea de programacion al agente de OpenCode."""
     client = get_client()
+    # Si no se indico carpeta, trabajar por defecto en la ULTIMA carpeta que
+    # el usuario abrio con open_vscode_folder (su proyecto actual), no en la
+    # carpeta del proyecto JARVIS.
+    directory = (directory or "").strip()
+    if not directory:
+        try:
+            from tools import system as _system
+
+            last = _system.last_vscode_folder()
+            if last:
+                directory = last
+                logger.info(
+                    "opencode_code: sin directory, uso el proyecto abierto: %s", last
+                )
+        except Exception:
+            pass
     return client.run_task(task, directory=directory, background=background)
 
 
@@ -753,3 +901,137 @@ def opencode_mcp(
         command=command,
         directory=directory or None,
     )
+
+
+def _click_opencode_input(window_title: str) -> bool:
+    """Hace clic en el input de la TUI de OpenCode dentro de VS Code.
+
+    El input de la TUI de opencode arranca SIN foco (estilo vim): sin este
+    clic, el texto que envia pyautogui no entra en ningun lado — el usuario
+    lo hace manualmente con el mouse. El input ocupa las ultimas lineas del
+    panel de terminal, justo encima de la statusbar de VS Code (~22px), asi
+    que clicamos cerca del borde inferior-centro de la ventana.
+    """
+    try:
+        from tools import window_tools
+
+        import pyautogui as _pg
+
+        found = window_tools.find_window(window_title)
+        if not found:
+            logger.warning("click input opencode: no encontre la ventana %r", window_title)
+            return False
+        win, _real = found
+        offset = int(
+            get_config().get("input", {}).get("opencode_input_click_offset", 55) or 55
+        )
+        x = int(win.left + win.width / 2)
+        y = int(win.top + win.height - offset)
+        _pg.moveTo(x, y, duration=0.15)
+        time.sleep(0.1)
+        _pg.click(x, y)
+        logger.info("Clic en el input de opencode: (%s, %s) [offset=%s]", x, y, offset)
+        return True
+    except Exception as e:
+        logger.warning("No se pudo hacer clic en el input de opencode: %s", e)
+        return False
+
+
+@register_tool("opencode_code_visual")
+def opencode_code_visual(
+    task: str, window: str = "Visual Studio Code", wait_seconds: int = 15
+) -> dict:
+    """Envia un prompt al panel de OpenCode en VS Code (terminal integrada) para
+    que el usuario vea en vivo como trabaja OpenCode. No devuelve resultado
+    estructurado: toma una captura de pantalla al final."""
+    task = (task or "").strip()
+    if not task:
+        return {"status": "error", "error": "Falta la tarea a programar."}
+
+    # Si el usuario acaba de abrir un proyecto con open_vscode_folder, apuntar
+    # a ESA ventana (el titulo contiene el nombre de la carpeta) para no
+    # escribir el prompt en otra ventana de VS Code.
+    try:
+        from tools import system as _system
+
+        last = _system.last_vscode_folder()
+        if last and (not window or window == "Visual Studio Code"):
+            window = os.path.basename(last)
+            logger.info("opencode_code_visual: ventana objetivo = %s", window)
+    except Exception:
+        pass
+
+    try:
+        from tools import window_tools, input_tools, screen_tools
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"No pude cargar las tools de ventana/input/pantalla: {e}",
+        }
+
+    # 1. Poner VS Code en primer plano.
+    try:
+        window_tools._activate_window(title=window)
+    except Exception as e:  # pragma: no cover - depende del SO/ventana
+        logger.warning("opencode_code_visual: activate_window fallo: %s", e)
+    time.sleep(0.6)
+
+    # 1b. CLIC EN EL INPUT DE OPENCODE. El input de la TUI arranca SIN foco
+    # (estilo vim): sin este clic el texto no entra en ningun lado. Despues
+    # del clic NO volvemos a activar la ventana (write/enter sin 'window')
+    # para no perder el foco interno que acabamos de ganar.
+    input_clicked = _click_opencode_input(window)
+    time.sleep(0.4)
+
+    # 2. Escribir el prompt en la terminal de OpenCode (sin 'window': la
+    # ventana ya esta activada y el input enfocado con el clic; re-activar
+    # podria perder el foco del input). _type_text maneja acentos/ñ con el
+    # portapapeles cuando hace falta.
+    try:
+        input_tools._type_text(text=task)
+        logger.info("Prompt escrito en la TUI de opencode (%d chars)", len(task))
+    except Exception as e:
+        return {"status": "error", "error": f"No pude escribir el prompt en VS Code: {e}"}
+    time.sleep(0.5)
+
+    # 3. Enviar (Enter), tambien sin 'window' para no perder el foco.
+    try:
+        input_tools._press_key(key="enter")
+        logger.info("Enter enviado a la TUI de opencode")
+    except Exception as e:
+        return {"status": "error", "error": f"No pude pulsar Enter en VS Code: {e}"}
+
+    # 4. Esperar a que OpenCode procese.
+    time.sleep(max(int(wait_seconds or 0), 1))
+
+    # 5. Capturar la pantalla para ver el resultado.
+    screenshot_path = None
+    try:
+        shot = screen_tools._take_screenshot()
+        if isinstance(shot, dict):
+            screenshot_path = (
+                shot.get("image_path")
+                or shot.get("path")
+                or shot.get("file")
+                or shot.get("screenshot")
+                or shot.get("image")
+            )
+    except Exception as e:  # pragma: no cover - depende del SO
+        logger.warning("opencode_code_visual: take_screenshot fallo: %s", e)
+
+    return {
+        "status": "sent",
+        "window": window,
+        "input_clicked": input_clicked,
+        "waited_seconds": wait_seconds,
+        "screenshot": screenshot_path,
+        "note": (
+            "El prompt se escribio en el input de OpenCode en VS Code "
+            "(primero se hace clic en el input para enfocarlo, porque la TUI "
+            "arranca sin foco) y se envio con Enter. JARVIS no recibe "
+            "respuesta estructurada por esta via; revisa la captura de "
+            "pantalla (screenshot) para ver si OpenCode lo recibio y esta "
+            "trabajando. Si input_clicked es false, el clic al input fallo "
+            "y el texto pudo no llegar."
+        ),
+    }

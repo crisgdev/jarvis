@@ -12,6 +12,30 @@ def _schema(type_: types.Type, properties=None, required=None, description=None,
 
 
 TOOLS = [
+    # ── Plan visible (subtareas en la GUI) ──
+    types.FunctionDeclaration(
+        name="show_plan",
+        description=(
+            "Muestra en pantalla el plan de subtareas ANTES de ejecutar una "
+            "orden que requiere 2 o mas pasos o herramientas. Usala solo en "
+            "esos casos; para charla o una sola accion NO la uses. Llamala una "
+            "sola vez por turno."
+        ),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "steps": types.Schema(
+                    type=types.Type.ARRAY,
+                    description=(
+                        "Pasos cortos en espanol, en orden de ejecucion "
+                        "(ej: 'Encontrar el proyecto', 'Abrir el proyecto en VS Code')"
+                    ),
+                    items=types.Schema(type=types.Type.STRING),
+                ),
+            },
+            required=["steps"],
+        ),
+    ),
     # ── Sistema ──
     types.FunctionDeclaration(
         name="get_system_info",
@@ -44,11 +68,48 @@ TOOLS = [
             properties={
                 "app_name": _schema(
                     types.Type.STRING,
-                    description="Nombre de la app o sitio web a abrir, ej: google, youtube, chrome, spotify",
+                    description=(
+                        "Nombre de la app, sitio web o cuenta de gmail a abrir. "
+                        "Ejemplos: google, youtube, chrome, spotify, gmail, "
+                        "'gmail institucional', 'gmail principal', 'gmail profesional', "
+                        "'gmail secundaria', '70597122@continental.edu.pe', etc."
+                    ),
                 ),
             },
             required=["app_name"],
         ),
+    ),
+    types.FunctionDeclaration(
+        name="open_vscode_folder",
+        description=(
+            "Abre Visual Studio Code EN una carpeta existente de la PC (no solo "
+            "VS Code vacio). Busca la carpeta por nombre en el escritorio, "
+            "documentos, descargas y OneDrive. Usala SIEMPRE que el usuario pida "
+            "abrir una carpeta/proyecto en VS Code (ej: 'abre ecommerce laptops "
+            "en vscode', 'abre mi proyecto X en visual studio code'). NO uses "
+            "run_python_code para esto: esta herramienta ya busca la carpeta y "
+            "lanza 'code \"ruta\"'."
+        ),
+        parameters=_schema(
+            types.Type.OBJECT,
+            properties={
+                "folder_name": _schema(
+                    types.Type.STRING,
+                    description="Nombre de la carpeta a abrir en VS Code (ej: 'ecommerce laptops')",
+                ),
+            },
+            required=["folder_name"],
+        ),
+    ),
+    types.FunctionDeclaration(
+        name="vscode_disable_restricted_mode",
+        description=(
+            "Desactiva el Restricted Mode (Workspace Trust) de Visual Studio "
+            "Code de forma permanente, editando settings.json. Usala cuando el "
+            "usuario pida quitar el modo restringido o cuando OpenCode no pueda "
+            "ejecutarse por el Restricted Mode. Requiere reiniciar VS Code."
+        ),
+        parameters=_schema(types.Type.OBJECT, properties={}),
     ),
     types.FunctionDeclaration(
         name="close_application",
@@ -825,6 +886,36 @@ TOOLS = [
         ),
     ),
     types.FunctionDeclaration(
+        name="opencode_code_visual",
+        description=(
+            "Envia un prompt al panel de OpenCode en VS Code (terminal integrada) "
+            "para que el USUARIO VEA EN VIVO como trabaja OpenCode. Usala cuando "
+            "el usuario pida ver en VS Code el prompt o el trabajo de OpenCode. "
+            "NO devuelve resultado estructurado: toma una captura de pantalla al "
+            "final. Prerequisito: VS Code abierto con la extension OpenCode activa "
+            "(terminal con 'opencode' corriendo). Para resultado estructurado "
+            "(archivos cambiados, costo) usa opencode_code (HTTP)."
+        ),
+        parameters=_schema(
+            types.Type.OBJECT,
+            properties={
+                "task": _schema(
+                    types.Type.STRING,
+                    description="Objetivo completo a programar, en espanol.",
+                ),
+                "window": _schema(
+                    types.Type.STRING,
+                    description="Titulo de la ventana de VS Code (default 'Visual Studio Code').",
+                ),
+                "wait_seconds": _schema(
+                    types.Type.INTEGER,
+                    description="Segundos a esperar a que OpenCode procese antes de capturar pantalla (default 15).",
+                ),
+            },
+            required=["task"],
+        ),
+    ),
+    types.FunctionDeclaration(
         name="opencode_result",
         description=(
             "Recoge el resultado de una tarea que opencode_code dejo corriendo "
@@ -888,4 +979,23 @@ TOOLS = [
     ),
 ]
 
+# Indice por nombre para poder enviar a Gemini solo el subconjunto que el
+# router (brain/router.py) considera relevante en cada turno.
+TOOLS_BY_NAME = {decl.name: decl for decl in TOOLS}
+
 GEMINI_TOOL = types.Tool(function_declarations=TOOLS)
+
+
+def tools_for(names) -> types.Tool:
+    """Devuelve un types.Tool con SOLO las declaraciones pedidas.
+
+    names=None o vacio -> todas (comportamiento historico). Se respeta el
+    orden de TOOLS para que el payload sea estable entre turnos iguales.
+    """
+    if not names:
+        return GEMINI_TOOL
+    wanted = set(names)
+    selected = [decl for decl in TOOLS if decl.name in wanted]
+    if not selected:
+        return GEMINI_TOOL
+    return types.Tool(function_declarations=selected)
