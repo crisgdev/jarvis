@@ -100,15 +100,17 @@ def _youtube_loop(video_name: str = None) -> dict:
     """Pone un video de YouTube en bucle (repeticion infinita).
 
     Si se indica video_name, busca ese video en YouTube, lo reproduce y lo
-    pone en bucle. Si no se indica, busca una ventana de YouTube ya abierta,
-    le da el foco y activa el bucle con la tecla 'l' (atajo de YouTube).
+    pone en bucle. Si no se indica, activa el bucle en el video de YouTube
+    que ya este reproduciendose en una pestaña abierta.
+
+    El bucle se activa enviando una peticion al servidor Flask de JARVIS
+    (http://127.0.0.1:5050/loop), que la extension de Chrome consume para
+    ejecutar document.querySelector('video').loop = true; en la pestaña
+    de YouTube.
     """
     import time
 
-    try:
-        import pyautogui
-    except ImportError:
-        return {"error": "pyautogui no esta instalado (pip install pyautogui)"}
+    FLASK_URL = "http://127.0.0.1:5050/loop"
 
     url = None
     if video_name:
@@ -156,30 +158,36 @@ def _youtube_loop(video_name: str = None) -> dict:
         except Exception as e:
             return {"error": f"No pude abrir {url}: {e}"}
 
-    # Buscar y enfocar ventana de YouTube, luego pulsar 'l' (bucle de YouTube)
+    # Notificar al servidor Flask para que la extension active el bucle
     try:
-        from tools.window_tools import list_windows, activate_window
-        result = list_windows()
-        youtube_title = None
-        if "windows" in result:
-            for w in result["windows"]:
-                title = w.get("title", "")
-                if "youtube" in title.lower():
-                    youtube_title = title
-                    break
-        if youtube_title:
-            act = activate_window(youtube_title)
-            if act.get("status") != "success":
-                return {"error": "Encontre YouTube pero no pude enfocarlo."}
-            time.sleep(0.5)
-    except Exception:
-        pass
+        import urllib.request
+        import urllib.error
+        import json as _json
 
-    try:
-        pyautogui.press("l")
+        payload = _json.dumps({"video_name": video_name}).encode("utf-8")
+        req = urllib.request.Request(
+            FLASK_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                return {
+                    "error": f"El servidor Flask respondio con codigo {resp.status}. "
+                             f"Asegurate de que este corriendo (python services/youtube_loop_server.py)."
+                }
+    except urllib.error.URLError as e:
         return {
-            "status": "success",
-            "message": "Puse el video de YouTube en bucle.",
+            "error": "No pude contactar con el servidor Flask de YouTube Loop. "
+                     "Inicialo con: python services/youtube_loop_server.py "
+                     f"(error: {e})"
         }
     except Exception as e:
-        return {"error": f"No pude activar el bucle: {e}"}
+        return {"error": f"Notificando al servidor Flask: {e}"}
+
+    return {
+        "status": "success",
+        "message": "Bucle activado en YouTube. "
+                   "Asegurate de tener la extension de Chrome instalada y el servidor Flask corriendo.",
+    }

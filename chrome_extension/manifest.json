@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "JARVIS YouTube Loop",
+  "version": "1.0",
+  "description": "Extensión para activar bucle en YouTube desde JARVIS",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:5050/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
