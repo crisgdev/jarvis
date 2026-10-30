@@ -230,6 +230,26 @@ TOOLS = [
             required=["query"],
         ),
     ),
+    types.FunctionDeclaration(
+        name="youtube_loop",
+        description=(
+            "Pone un video de YouTube en bucle (repeticion infinita). "
+            "Si se da video_name, busca ese video en YouTube, lo reproduce y lo "
+            "pone en bucle. Si no se da video_name, busca una ventana de YouTube "
+            "ya abierta, le da el foco y activa el bucle. Usala cuando el usuario "
+            "diga 'pon el video en bucle', 'pon X en bucle', 'repite el video', etc."
+        ),
+        parameters=_schema(
+            types.Type.OBJECT,
+            properties={
+                "video_name": _schema(
+                    types.Type.STRING,
+                    description="Nombre del video de YouTube a poner en bucle (opcional; si no se indica, se hace bucle al video que ya este en YouTube)",
+                ),
+            },
+            required=[],
+        ),
+    ),
 
     types.FunctionDeclaration(
         name="list_bookmarks",

@@ -20,6 +20,7 @@ _TEMPLATES = {
     "browse_url": "Abrir {url}",
     "search_web": "Buscar en la web",
     "play_youtube_video": "Reproducir en YouTube",
+    "youtube_loop": "Poner video en bucle",
     "list_bookmarks": "Revisar marcadores",
     "open_bookmark": "Abrir marcador",
     "search_file": "Buscar {name}",

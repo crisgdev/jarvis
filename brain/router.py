@@ -37,7 +37,7 @@ CORE_TOOLS = (
 
 # Tools extra que aporta cada pack (ademas del nucleo).
 PACK_TOOLS = {
-    "media": (),
+    "media": ("youtube_loop",),
     "mail": ("send_email", "read_recent_emails"),
     "calendar": (
         "get_upcoming_events",
@@ -98,7 +98,8 @@ PACK_SIGNALS = {
         "spotify", "reproduce", "pon ", "play", "volumen", "sube el",
         "baja el", "silencia", "silencio", "mute", "netflix", "pelicula",
         "peliculas", "juego", "juegos", "abre", "abrir", "cierra", "cerrar",
-        "app", "aplicacion", "programa",
+        "app", "aplicacion", "programa", "bucle", "loop", "repeticion",
+        "repetir",
     ),
     "mail": (
         "gmail", "correo", "correos", "email", "emails", "mail", "bandeja",

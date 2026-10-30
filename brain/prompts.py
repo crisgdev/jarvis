@@ -67,6 +67,10 @@ PACK_MEDIA = """APPS, WEB Y MEDIA:
   search_web para abrir aplicaciones.
 - Para videos de YouTube usa play_youtube_video (NUNCA browse_url ni
   search_web).
+- Para poner un video en bucle usa youtube_loop: si el usuario dice el nombre
+  del video ('pon X en bucle'), pasalo en video_name; si no dice nombre
+  ('pon el video en bucle'), llama sin argumentos para hacer bucle al video
+  que ya esta en YouTube.
 - Volumen con control_volume.
 - CERRAR: close_application cierra apps y ventanas por nombre o por titulo.
   Para cerrar una carpeta abierta ("cerrar documentos", "cerrar descargas"),

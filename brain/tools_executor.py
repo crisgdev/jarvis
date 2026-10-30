@@ -18,6 +18,7 @@ RISK_LEVELS = {
     "browse_url": "safe",
     "search_web": "safe",
     "play_youtube_video": "safe",
+    "youtube_loop": "moderate",
     "list_bookmarks": "safe",
     "open_bookmark": "safe",
     "search_file": "safe",

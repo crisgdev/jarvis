@@ -48,7 +48,7 @@ class RouterTest(unittest.TestCase):
         r = router.route("que hora es", enabled=False)
         self.assertTrue(r.all_tools)
         self.assertEqual(set(r.tools), set(router.all_tool_names()))
-        self.assertEqual(len(r.tools), 53)
+        self.assertEqual(len(r.tools), 54)
         self.assertEqual(len(set(r.tools)), len(r.tools), "sin duplicados")
 
     def test_all_tool_names_are_declared(self):
