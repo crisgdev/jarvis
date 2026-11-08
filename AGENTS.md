@@ -69,6 +69,35 @@ Mismo cerebro y misma memoria que la voz: notas, proyectos, preferencias y
 recuerdos se comparten (misma `jarvis_memory.db`). Cada canal mantiene su
 propia conversacion en curso en el chat de Gemini.
 
+**Comandos registrados** (menu `/` de Telegram): `/estado`, `/captura`,
+`/sordo`, `/escucha`, `/apagar`, `/reiniciar` y `/prender`. `/start` sigue
+funcionando pero ya no aparece en el menu (el bot ya esta encendido cuando
+lo usas; su unico valor era la ayuda).
+
+| Comando | Que hace | Detalle |
+|---|---|---|
+| `/estado` | Panel local: canal (voz+Telegram o solo Telegram), estado, modelo, llamada, modo sordo, micro, voz y uptime | No pasa por Gemini: responde aunque la API falle o no haya cuota |
+| `/captura` | Captura la pantalla y la manda como **foto** | Usa `tools/screen_tools._take_screenshot` en un hilo aparte para no bloquear el bot |
+| `/sordo` | Modo sordo | Ver seccion "Modo Sordo" |
+| `/escucha` | Vuelve a escuchar | Idem |
+| `/apagar` | **Hiberna** la PC (`SetSuspendState 1,1,0`) | Pide confirmacion con botones Si/No (45 s) porque no tiene deshacer remoto. Manda el aviso antes de congelar la sesion (`_HIBERNATE_DELAY`) y para el TTS |
+| `/reiniciar` | `shutdown /r /t 60` | Sin confirmacion: los 60 s son la ventana para abortar con `shutdown /a` |
+| `/prender` | Envia el paquete Wake-on-LAN (`tools/system._wake_on_lan`) | OJO: si la PC esta apagada, JARVIS no puede recibir el comando. El que realmente la enciende es `wake_listener.py` (mismo token, en un dispositivo siempre encendido de la LAN), que tambien acepta `/prender` |
+
+`/estado` y `/apagar` usan la instancia de JARVIS: `main.py` la registra con
+`telegram_bot.set_jarvis(jarvis)` antes de arrancar el bot. En
+`--telegram-only` no hay instancia y `/estado` lo reporta como "solo
+Telegram". Los comandos de energia llaman directo a las tools (`_shutdown_pc`,
+`_restart_pc`) sin pasar por Gemini, con `asyncio.to_thread` para no bloquear
+el loop del bot.
+
+Ademas, el bot entiende las ordenes de modo sordo escritas o en nota de voz
+("modo sordo", "no me escuches", "vuelve a escuchar", "quita el modo
+sordo"...): `_process_for()` las intercepta antes de Gemini, asi que no
+gastan tokens y funcionan con el modo sordo activo. Solo responde a
+`TELEGRAM_ALLOWED_USER_IDS`; a cualquier otro le contesta con su id para que
+el dueno lo agregue.
+
 ## Tools Disponibles para Gemini
 
 Gemini puede elegir automáticamente qué herramienta usar:
@@ -177,6 +206,7 @@ Jarvis/
 │   ├── tts.py                 # Text-to-Speech (edge-tts)
 │   ├── wake_word.py           # Hotkey Ctrl+Alt+Shift+J (una consulta)
 │   ├── clap_detector.py       # Detector de doble palmada (activa JARVIS con un aplauso)
+│   ├── deaf_mode.py           # Modo sordo: estado, persistencia y frases que lo activan
 │   └── telegram_bot.py        # Bot de Telegram (mismo cerebro/memoria)
 │
 ├── brain/
@@ -248,6 +278,7 @@ Jarvis/
 - El usuario planea agregar wake word por palmadas en el futuro.
 - Modo voz 100%: `voice.auto_start=true` iniciaría la conversación continua al arrancar; **por defecto está apagado** (`false`): JARVIS arranca en reposo (`idle`) todo el tiempo y atiende solo UNA consulta con `Ctrl+Alt+Shift+J`, ESPACIO manteniendo en la GUI, o el botón de la bandeja. La GUI es solo indicador visual y en `--background` la ventana se oculta a la bandeja del sistema (`gui.tray`). El usuario puede INTERRUMPIR a JARVIS mientras habla con "para", "espera", "silencio", "cállate", "basta", etc. y rectificar su consulta en el mismo audio (`voice.interrupt_enabled`, `interrupt_threshold` alto para no oirse a si mismo, `interrupt_max_wait`).
 - Telegram: mismo cerebro y memoria que la voz (cada canal su conversación). Confirmaciones de acciones peligrosas con botones inline; `services/telegram_bot.py` corre el bot en un hilo propio.
+- **Búsqueda de carpetas/proyectos** (`tools/system.py`): `open_application` y `open_vscode_folder` comparten `_find_folder()`/`_search_folders()`, que buscan primero en las carpetas "familiares" del usuario (`Documents\Proyectos-Ingenieria-Sistemas` + subcarpetas `Personales`/`Laborales`/`Aprendizajes`/`Universitarios`, `Proyectos`, `Projects`; ampliable con `paths.extra_project_roots`) y luego en Escritorio/Documentos/Descargas. Antes se caminaba `USERPROFILE` completo (incluido AppData: ~19 s por búsqueda). Ahora se saltan `AppData`, `node_modules`, `.git`, `venv`, etc., hay presupuesto de tiempo (3-8 s) y caché de 120 s. `_match_score()` tolera errores del STT con una clave fonética (`caicen` -> `kaizen`) y `_strip_folder_filler()` quita "abre el proyecto ... en vscode". Si `open_vscode_folder` no encuentra nada devuelve `suggestions` para que Gemini pregunte cuál era. `_find_shortcut_by_target()` compara solo el nombre del ejecutable destino (no la ruta completa): antes "abre Personales" ejecutaba `Iniciar Dismiss Lockscreen.vbs` porque su ruta vive dentro de `...\Personales\jarvis`. El router reconoce "visual studio code" (con espacios) como pack `dev`, así que `open_vscode_folder` está disponible en ese turno.
 
 ## Router de turno, prompts en capas y registro (implementado)
 
@@ -262,11 +293,14 @@ hora es"). Ahora hay tres decisiones tomadas en un solo sitio:
     `files`, `memory`, `screen`, `dev`, `power`, `bookmarks`).
   - `tools`: las tools que viajan a Gemini (`CORE_TOOLS` = 8 siempre +
     las del pack). Nunca se envía una tool que no aplique.
-  - `tier`: `fast` (`gemini-3.5-flash-lite`) o `strong`
-    (`gemini-3.6-flash`). Es `strong` si el pack es delicado
-    (`calendar`/`dev`/`mail`), si la orden es compuesta ("todos los", "y
-    luego", "hasta el"...) o si pasa de 16 palabras. El canal Telegram
-    (`detailed=True`) siempre va `strong`.
+  - `tier`: `fast` (`gemini-3.5-flash-lite`), `strong`
+    (`gemini-3.6-flash`) o `complex` (`gemini-3.8-flash`). Es `strong` si
+    el pack es delicado (`calendar`/`dev`/`mail`), si la orden es compuesta
+    ("todos los", "y luego", "hasta el"...) o si pasa de 16 palabras. Es
+    `complex` si la orden es muy compleja (varios packs delicados a la vez,
+    4+ packs en total, consulta de 30+ palabras, analisis profundo, etc.).
+    El canal Telegram (`detailed=True`) va `strong` salvo que cumpla los
+    criterios de `complex`.
 - **`brain/prompts.py`** — `PROMPT_CORE` (identidad, honestidad, reglas de
   herramientas) + un pack por capacidad. `build_prompt(core, packs, detailed)`
   ensambla solo lo que aplica, en orden estable. Una pregunta simple baja de
@@ -321,7 +355,7 @@ registra el consumo de tokens de cada llamada.
 - Cuando JARVIS responde literalmente "OK": eso NO es cuota agotada (eso es `"Se agotó la cuota de Gemini..."`). Es una respuesta SIN TEXTO de Gemini (truncada por `llm.max_output_tokens`, filtrada, o generación degenerada). `brain/gemini.py` ahora loguea `finish_reason` + `usage_metadata` (` thoughts/candidates/total`), reintenta UNA vez con el doble de presupuesto si fue `MAX_TOKENS`, y devuelve un mensaje con el motivo real. OJO: `max_output_tokens: 200` era demasiado bajo (200). Subido a 1024.
 - `llm.thinking_budget` es opcional (0 = sin razonamiento) pero **NO existe para `gemini-3.5-flash-lite`**: mandarlo da `400 INVALID_ARGUMENT` ("Request contains an invalid argument") en CADA request. Verificado: `gemini-3.1-flash-lite` sí lo acepta, `gemini-3.5-flash-lite` no. Por eso no está en `config.json`. Si lo activas y ves 400, el Cerebro cae solo al modelo de respaldo por `_try_fallback`.
 - El fallback de modelo (`_try_fallback`) reintenta el mensaje REAL del usuario en el modelo de respaldo; antes mandaba un ping "Responde solo: OK" y devolvía ese "OK" como si fuera la respuesta (el usuario veía OK y perdía su respuesta, y el turno falso quedaba en el historial).
-- Wake-on-LAN: herramienta JARVIS `wake_on_lan` (MAC de la laptop: `B0:6E:BF:11:1A:4C` en `config.json` -> `wol.mac`; broadcast `wol.broadcast`). NO puede encender la propia PC desde fuera: el paquete mágico debe salir de un dispositivo de la MISMA red local mientras la PC está apagada. `wake_listener.py` es un compañero standalone que escucha un bot de Telegram (usa `TELEGRAM_BOT_TOKEN` o mejor `TELEGRAM_WOL_BOT_TOKEN`/`WOL_MAC`/`WOL_BROADCAST` en `.env`) y envía el paquete WOL; corre en un dispositivo siempre-encendido de la LAN (celular Termux, Raspberry, otro PC). `enable_wol.ps1` activa WOL en Windows (admin; backup en `wol_backup/`; reversible con `-Undo`; `-Status` para ver estado) y desactiva Fast Startup. Setup del celular en `TERMUX_SETUP.md`. LIMITACION CONFIRMADA: en esta laptop el WOL despierta desde SUSPENSION pero NO desde apagado real (S5); por eso `power.shutdown_mode: "sleep"` en config.json hace que JARVIS "apague" = suspenda (apagado real solo con `mode='off'`). Para encender la laptop desde el celular con datos móviles hace falta un dispositivo en casa: router con WOL remoto, o smart-plug + BIOS "Restore on AC power loss".
+- Wake-on-LAN: herramienta JARVIS `wake_on_lan` (MAC de la laptop: `B0:6E:BF:11:1A:4C` en `config.json` -> `wol.mac`; broadcast `wol.broadcast`). NO puede encender la propia PC desde fuera: el paquete mágico debe salir de un dispositivo de la MISMA red local mientras la PC está apagada. `wake_listener.py` es un compañero standalone que escucha un bot de Telegram (usa `TELEGRAM_BOT_TOKEN` o mejor `TELEGRAM_WOL_BOT_TOKEN`/`WOL_MAC`/`WOL_BROADCAST` en `.env`) y envía el paquete WOL; corre en un dispositivo siempre-encendido de la LAN (celular Termux, Raspberry, otro PC). `enable_wol.ps1` activa WOL en Windows (admin; backup en `wol_backup/`; reversible con `-Undo`; `-Status` para ver estado) y desactiva Fast Startup. Setup del celular en `TERMUX_SETUP.md`. CONFIGURACION ACTUAL: `power.shutdown_mode: "hibernate"` en config.json. JARVIS "apaga" = hiberna de verdad (guarda RAM en disco y apaga) via `SetSuspendState 1,1,0`. Verificado: WOL despierta la PC desde hibernacion, el GRUB auto-selecciona Windows (timeout 1s). Lock screen: Windows 10 seguia mostrando pantalla de bloqueo al despertar (secure desktop, SendInput no llegaba). Se implemento `dismiss_lockscreen.ps1` (PowerShell SendKeys) ejecutado por la Tarea Programada `DismissLockScreen_Wake` (corre como SYSTEM con privilegios maximos, se activa al despertar via Event ID 107/507 de Kernel-Power, delay 5s). El script Python `dismiss_lockscreen.py` se mantiene como respaldo pero la Tarea Programada es la solucion principal. Logs en `logs/dismiss_lockscreen.log`. Modos disponibles: `hibernate` (default, "apaga"/"hiberna"), `sleep` ("suspender"/"suspension"), `off` ("apagado real"/"apagar del todo", NO despierta con WOL). Para encender la laptop desde el celular con datos móviles hace falta un dispositivo en casa: router con WOL remoto, o smart-plug + BIOS "Restore on AC power loss".
 
 ## Programación con OpenCode (implementado)
 
@@ -353,9 +387,67 @@ Rediseño completo (octubre 2026) con fondo único `#0a0a1a` en toda la ventana:
 - **Arriba a la derecha**: hora 12 h con AM/PM pequeño y debajo `MIÉ, 07 OCT`; debajo el cuadrito `MODELO / ESTADO / TIEMPO TURNO` (claves celeste, valores blancos). El modelo se lee de `jarvis.get_model()` (refleja fallbacks) y el tiempo de turno corre de `processing` a `idle`.
 - **Subtítulos abajo** (`gui/subtitles.py`): `TÚ >` en celeste + texto verde, `JARVIS >` en celeste + texto blanco; entran abajo, suben y se desvanecen (~7 s + fundido de 2 s), máximo 3 líneas.
 - El orbe (`gui/call_view.py`) no cambió de dibujo ni de colores de estado, solo se le añadieron los bindings de press/release y la leyenda inferior ahora menciona los atajos (ya no hay botones).
+- En modo sordo la leyenda pasa a `MODO SORDO — TOCA EL ORBE PARA VOLVER A ESCUCHAR` y el estado muestra `MODO SORDO`; tocar el orbe o mantener ESPACIO sale del modo (ver sección "Modo Sordo").
 - Se eliminaron la barra de nivel de voz y los botones inferiores (JARVIS / TERMINE / STOP). La parada de emergencia sigue existiendo por código (`jarvis.emergency_stop`). El atajo `Ctrl+Alt+Shift+J` (una consulta) y el ESPACIO manteniendo en la GUI siguen igual.
 - Todos los métodos públicos de la GUI se marshalean al hilo principal con `after(0, ...)`; antes `set_state`/`add_message` se llamaban desde hilos de trabajo tocando Tkinter.
 - Eventos de subtareas: `brain/gemini.py` emite `turn_start` / `plan` / `task_start` / `task_done` / `turn_end` por `set_task_callback`; `core/jarvis.py` los reenvía por `set_callbacks(on_task=...)`. El cerebro de Telegram no registra callback, así que su chat no se afecta.
+
+## Modo Sordo (implementado)
+
+Problema real: con la laptop sonando (video, musica) el microfono captura el
+altavoz. El detector de doble palmada se dispara con los aplausos del video y
+el STT transcribe el audio como si fuera el dueno. En vez de pelear con el eco
+(se probo cancelacion de eco adaptativa y se descarto: `services/echo.py`
+borrado, `soundcard` desinstalado), JARVIS puede **dejar de escuchar del
+todo** y volver a escuchar cuando el dueno lo pida.
+
+- **Modulo**: `services/deaf_mode.py`. Estado global (`is_deaf()`),
+  persistencia y `match_command(texto)` -> `"on"` / `"off"` / `None`. Las
+  frases se normalizan (minusculas, sin acentos, sin puntuacion) y **OFF se
+  evalua primero**: "quita el modo sordo" y "modo sordo off" tambien
+  contienen "modo sordo", y la intencion correcta es desactivar.
+  - ON: `modo sordo`, `no escuches`, `no me escuches`, `deja de escuchar`,
+    `deja de escucharme`, `no me oigas`, `apaga el microfono`, `apaga el
+    micro`, `desactiva el microfono` / `desactiva la escucha`.
+  - OFF: `vuelve a escuchar(me)`, `escuchame (de nuevo)`, `ya puedes
+    escuchar(me)`, `activa la escucha`, `desactiva / quita / sal del modo
+    sordo`, `modo sordo off`, `modo normal`. Ojo: "escucha esta cancion" o
+    "no escuchaste bien" NO matchean (hay tests para eso).
+- **Estado**: `State.DEAF` en `core/jarvis.py` (la GUI lo muestra como
+  `MODO SORDO`). `_set_state(IDLE)` se convierte en `DEAF` mientras este
+  activo, asi que ningun camino puede "volver al reposo" y reactivar la
+  escucha por accidente.
+- **Que se apaga**: microfono (grabacion, push-to-talk y modo llamada),
+  detector de doble palmada (`clap_detector.pause()`), atajo
+  `Ctrl+Alt+Shift+J` (ignorado en `start_listening`), interrupcion mientras
+  JARVIS habla y `auto_start`. Al entrar se corta lo que este sonando: se
+  detiene la grabacion en curso, se cancela la llamada y se para el TTS.
+- **Que sigue funcionando**: Telegram (via principal para salir), el TTS (la
+  confirmacion hablada "Modo sordo activado...") y los comandos que no
+  necesitan micro. Las acciones `dangerous` no se pueden confirmar por voz:
+  `confirm_by_voice` devuelve `False` y la tool queda `cancelled` (se
+  cancelan por seguridad; para aprobarlas hay que usar Telegram).
+- **Como se entra/sale**:
+  - Voz o texto en la GUI: se intercepta en `_process_voice`,
+    `_process_call_audio` y `_process_text_thread` **antes** de Gemini
+    (`_handle_deaf_command`): no gasta tokens y responde hablando.
+  - Telegram: `/sordo`, `/escucha` o las frases naturales (texto o nota de
+    voz) via `_process_for()`.
+  - GUI: tocar el orbe o mantener ESPACIO estando en `DEAF` sale del modo
+    sordo (`on_deaf_off` en `main.py`). Es una accion deliberada de teclado,
+    no audio, y es el salvavidas si no hay Telegram a mano.
+- **Persistencia**: `logs/deaf_mode.json` (`{"deaf": true, "since": ...,
+  "source": ...}`). Sobrevive reinicios a proposito: si estabas viendo un
+  video, JARVIS no debe despertarse al volver a arrancar. `voice.deaf_mode`
+  en `config.json` es solo el valor inicial cuando el archivo no existe.
+  Para salir sin Telegram: borrar `logs/deaf_mode.json` (o poner
+  `"deaf": false`) y reiniciar.
+- **Tests**: `tests/test_deaf_mode.py` (matchers ON/OFF, acentos, frases que
+  NO deben matchear, persistencia, listeners y `toggle`).
+- **GUI**: leyenda `MODO SORDO — TOCA EL ORBE PARA VOLVER A ESCUCHAR`
+  (`HINT_DEAF` en `gui/header.py`) y `STATE_LABELS["deaf"]`.
+- OJO: `start_clap_listener` hace `_paused = False`, por eso `main.py` vuelve
+  a pausar las palmadas despues de arrancarlas si JARVIS arranca sordo.
 
 ## Ejecución y Autoarranque
 

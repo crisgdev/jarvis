@@ -6,9 +6,10 @@ mini-PC, otro PC, router con Python...):
 
     python wake_listener.py
 
-Cuando le escribas por Telegram "prende la pc" (o "enciende", "wol"), el
-script envia el paquete magico wake-on-LAN a la MAC de config.json (wol.mac)
-y la PC se enciende SOLO si tiene activado Wake-on-LAN en Windows/BIOS.
+Cuando le escribas por Telegram "prende la pc" (o "/prender", "enciende",
+"wol"), el script envia el paquete magico wake-on-LAN a la MAC de
+config.json (wol.mac) y la PC se enciende SOLO si tiene activado
+Wake-on-LAN en Windows/BIOS.
 
 IMPORTANTE:
 - El paquete magico viaja por la red local, asi que este dispositivo DEBE
@@ -150,13 +151,19 @@ def main():
             if text in ("/start", "/help"):
                 api_call(token, "sendMessage", {
                     "chat_id": chat,
-                    "text": f"Listener WOL activo. Tu id es {user}. Di 'prende la pc' para encenderla."
+                    "text": (
+                        f"Listener WOL activo. Tu id es {user}.\n"
+                        "Envia /prender (o di 'prende la pc') para encenderla."
+                    ),
                 })
                 continue
 
             if user not in owners:
                 continue
-            if not any(k in text for k in ("prende", "enciende", "encender", "wol", "prende la pc")):
+            if not any(
+                k in text
+                for k in ("/prender", "prende", "enciende", "encender", "despierta", "wol")
+            ):
                 continue
 
             print(f"[WOL] Orden recibida: '{text}'")

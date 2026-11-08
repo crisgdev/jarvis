@@ -36,8 +36,9 @@ class OpenApplicationRoutingTest(unittest.TestCase):
 
     def test_unknown_app_returns_error(self):
         with mock.patch("tools.system._resolve_app", return_value=None):
-            with mock.patch("tools.system.subprocess.Popen") as mock_popen:
-                result = execute_tool("open_application", {"app_name": "weirdthing"})
+            with mock.patch("tools.system._find_folder", return_value=None):
+                with mock.patch("tools.system.subprocess.Popen") as mock_popen:
+                    result = execute_tool("open_application", {"app_name": "weirdthing"})
         mock_popen.assert_not_called()
         self.assertEqual(result["status"], "error")
 

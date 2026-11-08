@@ -106,10 +106,65 @@ def get_max_record_seconds() -> int:
 
 
 def get_input_device() -> int | None:
+    """Devuelve el indice del microfono a usar.
+
+    Prioridad:
+      1. Si `audio.input_device` esta configurado (substring del nombre del
+         dispositivo, sin distinguir mayusculas), se usa el primer dispositivo
+         de entrada cuyo nombre lo contenga. Asi se puede bloquear un mic
+         concreto (ej. "Realtek") y nunca otro.
+      2. Si no, el dispositivo de entrada por defecto de Windows.
+      3. Respaldo: primer dispositivo con "mic" que NO sea el Sound Mapper
+         generico de Microsoft (que captura con ganancia muy baja).
+    """
     try:
+        audio_cfg = get_config().get("audio", {}) or {}
+        configured = (audio_cfg.get("input_device") or "").strip().lower()
+
         devices = sd.query_devices()
+
+        # 1. Dispositivo configurado explicitamente (substring del nombre)
+        if configured:
+            for i, d in enumerate(devices):
+                if d.get("max_input_channels", 0) <= 0:
+                    continue
+                if configured in (d.get("name") or "").lower():
+                    logger.info(
+                        "Microfono seleccionado por config: device=%d (%s)",
+                        i, d.get("name"),
+                    )
+                    return i
+            logger.warning(
+                "No se encontro dispositivo de audio que contenga '%s'; "
+                "usando el por defecto de Windows",
+                configured,
+            )
+
+        # 2. Dispositivo de entrada por defecto de Windows
+        try:
+            default_input = sd.default.device[0]
+            if default_input is not None and int(default_input) >= 0:
+                dev = devices[int(default_input)]
+                if dev.get("max_input_channels", 0) > 0:
+                    name = (dev.get("name") or "").lower()
+                    if "mapper" not in name:
+                        logger.info(
+                            "Microfono por defecto de Windows: device=%d (%s)",
+                            int(default_input), dev.get("name"),
+                        )
+                        return int(default_input)
+        except Exception:
+            pass
+
+        # 3. Respaldo: primer mic real (excluyendo Sound Mapper generico)
         for i, d in enumerate(devices):
-            if d["max_input_channels"] > 0 and "mic" in d["name"].lower():
+            if d.get("max_input_channels", 0) <= 0:
+                continue
+            name = (d.get("name") or "").lower()
+            if "mapper" in name or "sound mapper" in name:
+                continue
+            if "mic" in name or "microphone" in name or "micrófono" in name:
+                logger.info("Microfono (respaldo): device=%d (%s)", i, d.get("name"))
                 return i
     except Exception as e:
         logger.error("Error buscando microfono: %s", e)

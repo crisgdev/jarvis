@@ -54,14 +54,13 @@ def _settings():
 
 
 def _input_device():
+    # Mismo criterio que services.audio: un solo punto de verdad para el mic.
     try:
-        devices = sd.query_devices()
-        for i, d in enumerate(devices):
-            if d["max_input_channels"] > 0 and "mic" in d["name"].lower():
-                return i
+        from services.audio import get_input_device
+        return get_input_device()
     except Exception as e:
         logger.error("Error buscando microfono (clap): %s", e)
-    return None
+        return None
 
 
 def _open_stream():

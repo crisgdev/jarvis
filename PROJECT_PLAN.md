@@ -202,7 +202,7 @@ Funciones CRUD para cada tabla.
 
 ### 4.3 `services/tts.py`
 - `speak(text)`: Convertir texto a audio con edge-tts y reproducir
-- Voz: `es-MX-DaliaNeural` (o configurable)
+- Voz: `es-HN-CarlosNeural` (o configurable)
 - `stop_speech()`: Detener reproduccion actual
 - Streaming: enviar fragmentos para reducir latencia
 
@@ -285,7 +285,7 @@ Sistema de eventos proactivos en background thread:
 {
     "voice": {
         "language": "es",
-        "tts_voice": "es-MX-DaliaNeural",
+        "tts_voice": "es-HN-CarlosNeural",
         "stt_model": "small",
         "activation_key": "ctrl+alt+shift+j",
         "once_key": "ctrl+alt+shift+j",

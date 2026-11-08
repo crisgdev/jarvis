@@ -32,6 +32,7 @@ SYSTEM_PROMPT = PROMPT_CORE
 FALLBACK_MODELS = [
     "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
+    "gemini-3.8-flash",
     "gemini-3.1-flash-lite",
     "gemini-flash-lite-latest",
 ]
@@ -135,11 +136,19 @@ class GeminiBrain:
         self._routing_enabled = bool(routing_cfg.get("enabled", True))
         self._fast_model = routing_cfg.get("fast_model") or self._default_model
         self._strong_model = routing_cfg.get("strong_model") or self._default_model
+        self._complex_model = (
+            routing_cfg.get("complex_model")
+            or routing_cfg.get("strong_model")
+            or self._default_model
+        )
         self._fast_history_turns = int(
             routing_cfg.get("fast_history_turns", 6) or 6
         )
         self._strong_history_turns = int(
             routing_cfg.get("strong_history_turns", self.max_turns) or self.max_turns
+        )
+        self._complex_history_turns = int(
+            routing_cfg.get("complex_history_turns", self.max_turns) or self.max_turns
         )
         self._escalate_on_failure = bool(routing_cfg.get("escalate_on_failure", True))
         self._full_tools_on_unknown = bool(
@@ -228,9 +237,19 @@ class GeminiBrain:
 
         fast = getattr(self, "_fast_model", self.model)
         strong = getattr(self, "_strong_model", self.model)
-        target = strong if route.tier == "strong" else fast
+        complex_model = getattr(self, "_complex_model", strong)
+        if route.tier == "complex":
+            target = complex_model
+        elif route.tier == "strong":
+            target = strong
+        else:
+            target = fast
 
-        if route.tier == "strong":
+        if route.tier == "complex":
+            self._history_turns = getattr(
+                self, "_complex_history_turns", self.max_turns
+            )
+        elif route.tier == "strong":
             self._history_turns = getattr(
                 self, "_strong_history_turns", self.max_turns
             )
@@ -794,8 +813,11 @@ class GeminiBrain:
         current = getattr(self, "model", "")
         ordered: list[str] = []
         if getattr(self, "_escalate_on_failure", False):
+            complex_model = getattr(self, "_complex_model", None)
             strong = getattr(self, "_strong_model", None)
-            if strong and strong != current:
+            if complex_model and complex_model != current:
+                ordered.append(complex_model)
+            if strong and strong != current and strong not in ordered:
                 ordered.append(strong)
         for model in self._configured_fallbacks():
             if model != current and model not in ordered:

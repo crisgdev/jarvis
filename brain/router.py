@@ -5,7 +5,8 @@ del usuario, detecta el tema y devuelve tres cosas a la vez:
 
     packs  -> que bloques de prompt se activan (brain/prompts.py)
     tools  -> que declaraciones de herramientas viajan a Gemini
-    tier   -> "fast" (modelo ligero) o "strong" (modelo completo)
+    tier   -> "fast" (modelo ligero), "strong" (modelo completo) o "complex"
+               (modelo mas potente, para tareas muy complejas)
 
 Ventaja de tenerlo en un solo lugar: prompt, tools y modelo no se contradicen
 entre si.
@@ -89,6 +90,22 @@ PACK_TOOLS = {
 # Packs cuyo tema es lo bastante delicado para usar el modelo completo si o si.
 STRONG_PACKS = frozenset({"calendar", "dev", "mail"})
 
+# Umbral de packs totales a partir del cual se asume una orden muy compleja
+# (varios dominios a la vez).
+COMPLEX_MIN_PACKS = 4
+# Umbral de palabras a partir del cual se asume una orden muy compleja.
+COMPLEX_LONG_WORDS = 30
+# Senales explicitas de una solicitud muy compleja / profunda.
+COMPLEX_SIGNALS = (
+    "complejo", "compleja", "complejas", "complejos",
+    "detallado", "detallada", "detalladamente", "detallados",
+    "analiza profundamente", "analisis profundo", "analisis exhaustivo",
+    "paso a paso", "razona", "razonamiento", "piensa bien",
+    "exhaustivo", "exhaustiva", "thorough", "deep", "profundiza",
+    "multi paso", "varios pasos",
+    "modelo 3.8", "modelo complejo", "usa 3.8", "usa el 3.8",
+)
+
 
 # ── Senales de intencion ──────────────────────────────────────────────────
 # Se comparan contra el texto normalizado (minusculas, sin acentos).
@@ -130,7 +147,8 @@ PACK_SIGNALS = {
     "dev": (
         "codigo", "programa", "programar", "programacion", "opencode",
         "github", "git", "repo", "repositorio", "commit", "bug", "bugs",
-        "vscode", "vs code", "refactor", "refactoriza", "script", "api",
+        "vscode", "vs code", "visual studio", "studio code", "editor de codigo",
+        "refactor", "refactoriza", "script", "api",
         "docker", "instala", "dependencia", "dependencias", "compila",
         "despliega", "deploy", "backend", "frontend", "base de datos",
         "funcion", "test", "tests", "terminal", "servidor",
@@ -228,7 +246,22 @@ def route(text: str, detailed: bool = False, enabled: bool = True) -> Route:
 
     words = len(_WORD_RE.findall(norm))
 
-    if detailed:
+    # Criterios de "muy complejo" (tercer nivel, modelo mas potente).
+    complex_reasons = []
+    if len(STRONG_PACKS & set(packs)) >= 2:
+        complex_reasons.append(
+            "varios packs complejos: " + ",".join(sorted(STRONG_PACKS & set(packs)))
+        )
+    if len(packs) >= COMPLEX_MIN_PACKS:
+        complex_reasons.append(f"muchos packs ({len(packs)})")
+    if words >= COMPLEX_LONG_WORDS:
+        complex_reasons.append(f"consulta muy larga ({words} palabras)")
+    if any(sig in norm for sig in COMPLEX_SIGNALS):
+        complex_reasons.append("solicitud compleja/profunda")
+
+    if complex_reasons:
+        tier, why = "complex", "; ".join(complex_reasons)
+    elif detailed:
         tier, why = "strong", "canal detallado"
     elif STRONG_PACKS.intersection(packs):
         tier, why = "strong", "pack complejo: " + ",".join(sorted(STRONG_PACKS & set(packs)))
@@ -242,9 +275,19 @@ def route(text: str, detailed: bool = False, enabled: bool = True) -> Route:
     if not packs:
         why += " (sin pack reconocido)"
 
+    # Tareas muy complejas: todos los packs y todas las tools, para no dejar
+    # fuera ningun dominio ni herramienta que el modelo pueda necesitar.
+    if tier == "complex":
+        packs = list(PACK_TOOLS.keys())
+        tools = list(all_tool_names())
+        all_tools = True
+    else:
+        all_tools = False
+
     return Route(
         packs=tuple(packs),
         tools=tuple(tools),
         tier=tier,
         reason=why,
+        all_tools=all_tools,
     )

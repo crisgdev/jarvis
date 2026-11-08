@@ -32,7 +32,7 @@ _player: threading.Thread | None = None
 
 def _get_voice() -> str:
     cfg = get_config().get("voice", {})
-    return cfg.get("tts_voice", "es-MX-DaliaNeural")
+    return cfg.get("tts_voice", "es-HN-CarlosNeural")
 
 
 def _split_sentences(text: str) -> list[str]:

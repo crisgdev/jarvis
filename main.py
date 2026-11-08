@@ -145,6 +145,9 @@ def main():
         jarvis.start_listening(push_to_talk=True)
         app.after(100, on_audio_level)
 
+    def on_deaf_off():
+        jarvis.set_deaf(False, source="gui")
+
     def on_confirmation(tool_name, args):
         title, _message = confirmation_request(tool_name, args)
         return jarvis.confirm_by_voice(
@@ -170,6 +173,7 @@ def main():
     app.on_ptt_stop(jarvis.stop_listening)
     app.on_ptt_cancel(jarvis.cancel_listening)
     app.on_ptt_interrupt(jarvis.interrupt_speaking)
+    app.on_deaf_off(on_deaf_off)
 
     from services import wake_word
     wake_word.start_listening(jarvis.start_listening)
@@ -193,6 +197,10 @@ def main():
 
             if clap_detector.start_clap_listener(_on_double_clap):
                 logger.info("Detector de palmadas activo")
+                if jarvis.is_deaf():
+                    # Arranco despues de que JARVIS ya estaba sordo: se pausa.
+                    clap_detector.pause()
+                    logger.info("Palmadas en pausa (modo sordo)")
             else:
                 logger.info("Detector de palmadas desactivado por config")
         except Exception as e:
@@ -207,7 +215,10 @@ def main():
 
     telegram_enabled = bool(get_setting("telegram", "enabled", True))
     if telegram_enabled:
-        from services.telegram_bot import start_telegram_bot
+        from services.telegram_bot import set_jarvis, start_telegram_bot
+
+        # /estado y /apagar necesitan la instancia (voz + GUI).
+        set_jarvis(jarvis)
         start_telegram_bot()
 
     def on_event(event_type, message):

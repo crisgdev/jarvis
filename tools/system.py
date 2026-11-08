@@ -1,9 +1,12 @@
 import datetime
+import difflib
 import logging
 import os
 import re
 import socket
 import subprocess
+import time
+import unicodedata
 import webbrowser
 import shutil
 import psutil
@@ -288,38 +291,162 @@ def _resolve_folder(name: str) -> str | None:
     return folder if os.path.isdir(folder) else None
 
 
-# Raíces donde buscar carpetas arbitrarias por nombre (proyectos, trabajo,
-# etc.). Se completa con extra_project_roots de config.json si existe.
+# Carpetas "familiares" donde viven los proyectos del usuario. Se detectan
+# solas (Documents\Proyectos-Ingenieria-Sistemas, sus subcarpetas Personales /
+# Laborales / Aprendizajes / Universitarios, Proyectos, Projects...) y se
+# pueden ampliar desde config.json -> paths.extra_project_roots.
+_PROJECTS_SUBDIRS = (
+    "Proyectos-Ingenieria-Sistemas",
+    "Proyectos",
+    "Projects",
+    "GitHub",
+    "dev",
+    "code",
+)
+
+# Carpetas enormes o irrelevantes que no contienen proyectos y que harian la
+# busqueda lentisima (AppData sola tarda ~19 s). Se saltan al caminar.
+_FOLDER_SKIP_DIRS = {
+    "appdata", "application data", "local settings", "node_modules", ".git",
+    "__pycache__", "venv", ".venv", "env", ".idea", ".vscode", "dist",
+    "build", "target", "bin", "obj", "$recycle.bin", "system volume information",
+    "windows", "winsxs", "program files", "program files (x86)", "programdata",
+    "music", "videos", "pictures", "saved games", "temp", "tmp",
+}
+
+# Palabras de relleno que el usuario (o el STT) antepone al nombre real.
+_FOLDER_FILLER = {
+    "abre", "abrir", "busca", "buscar", "entra", "entrar", "ve", "ir",
+    "la", "el", "las", "los", "una", "un", "mi", "mis", "nuestro", "nuestra",
+    "carpeta", "carpetas", "directorio", "folder", "proyecto", "proyectos",
+    "de", "del", "en", "con", "para", "por", "favor", "porfavor", "visual",
+    "studio", "code", "vscode",
+}
+
+# Cache de resoluciones (nombre -> (ts, ruta|None)) para no repetir busquedas
+# profundas en el mismo turno.
+_FOLDER_CACHE: dict[str, tuple[float, "str | None"]] = {}
+_FOLDER_CACHE_TTL = 120.0
+_FOLDER_MIN_SCORE = 0.72
+
+
+def _normalize_name(text: str) -> str:
+    """Minusculas, sin acentos ni puntuacion ('Kaizen!' -> 'kaizen')."""
+    text = unicodedata.normalize("NFKD", (text or "").lower())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]", "", text)
+
+
+def _phonetic_key(text: str) -> str:
+    """Clave fonetica para tolerar errores tipicos del STT en espanol.
+
+    'caicen' / 'kaizen' / 'caisen' -> 'kaisen' (el STT confunde c/k, z/s, v/b).
+    """
+    key = _normalize_name(text)
+    key = key.replace("qu", "k").replace("ll", "y")
+    key = key.replace("ce", "se").replace("ci", "si")
+    key = key.replace("za", "sa").replace("ze", "se")
+    key = key.replace("zo", "so").replace("zu", "su")
+    key = key.replace("c", "k").replace("z", "s").replace("v", "b")
+    key = re.sub(r"(.)\1+", r"\1", key)
+    return key
+
+
+def _match_score(query: str, name: str) -> float:
+    """Similitud 0..1 entre lo pedido y el nombre de una carpeta.
+
+    1.0 = exacto, 0.9 = uno contiene al otro, si no difflib sobre el texto
+    normalizado y sobre la clave fonetica (para 'caicen' -> 'kaizen').
+    """
+    q = _normalize_name(query)
+    n = _normalize_name(name)
+    if not q or not n:
+        return 0.0
+    if q == n:
+        return 1.0
+    if len(q) >= 3 and (q in n or n in q):
+        return 0.9
+    score = difflib.SequenceMatcher(None, q, n).ratio()
+    pq, pn = _phonetic_key(query), _phonetic_key(name)
+    if len(pq) >= 4 and len(pn) >= 4:
+        score = max(score, difflib.SequenceMatcher(None, pq, pn).ratio())
+    return score
+
+
+def _strip_folder_filler(text: str) -> str:
+    """Quita 'abre', 'el', 'proyecto', 'en vscode'... y deja el nombre real."""
+    norm = unicodedata.normalize("NFKD", (text or "").lower())
+    norm = "".join(ch for ch in norm if not unicodedata.combining(ch))
+    tokens = re.findall(r"[a-z0-9]+", norm)
+    return " ".join(tok for tok in tokens if tok not in _FOLDER_FILLER)
+
+
 def _folder_search_roots() -> list[str]:
-    roots = []
-    user_profile = os.environ.get("USERPROFILE", "")
-    if user_profile:
-        roots.extend([
-            user_profile,
-            os.path.join(user_profile, "Documents"),
-            os.path.join(user_profile, "Desktop"),
-            os.path.join(user_profile, "Downloads"),
-        ])
-    for extra in (get_config().get("paths", {}) or {}).get("extra_project_roots", []):
-        if extra and extra not in roots:
-            roots.append(extra)
-    # Carpetas comunes de proyectos (ingenieria, trabajos, etc.) para encontrar
-    # proyectos anidados mas rapidamente sin tener que caminar todo el disco.
+    """Raices donde buscar carpetas, ordenadas de mas a menos probable.
+
+    Primero las carpetas de proyectos conocidas (asi 'kaizen' se encuentra en
+    milisegundos en ...\\Proyectos-Ingenieria-Sistemas\\Personales\\kaizen) y al
+    final el perfil y las unidades, para que una busqueda profunda nunca se
+    atasque en AppData.
+    """
+    user_profile = os.environ.get("USERPROFILE", "") or os.path.expanduser("~")
     documents = os.path.join(user_profile, "Documents")
-    for sub in (
-        "Proyectos",
-        "Proyectos-Ingenieria-Sistemas",
-        "Proyectos-Ingenieria-Sistemas/Personales",
-        "Projects",
-    ):
-        cand = os.path.join(documents, *sub.split("/"))
-        if os.path.isdir(cand) and cand not in roots:
+    roots: list[str] = []
+
+    # 1. Rutas configuradas explicitamente por el usuario.
+    try:
+        extras = (get_config().get("paths", {}) or {}).get("extra_project_roots", []) or []
+        for extra in extras:
+            if isinstance(extra, str) and extra.strip():
+                roots.append(os.path.expandvars(os.path.expanduser(extra.strip())))
+    except Exception:
+        pass
+
+    # 2. Carpetas de proyectos conocidas y sus categorias de primer nivel
+    #    (Personales, Laborales, Aprendizajes, Universitarios...).
+    for sub in _PROJECTS_SUBDIRS:
+        cand = os.path.join(documents, sub)
+        if os.path.isdir(cand):
             roots.append(cand)
-    # Raíces de unidad como último recurso (búsqueda superficial).
+            try:
+                for entry in os.scandir(cand):
+                    if entry.is_dir(follow_symlinks=False) and (
+                        entry.name.lower() not in _FOLDER_SKIP_DIRS
+                    ):
+                        roots.append(entry.path)
+            except OSError:
+                continue
+
+    # 3. Carpetas personales clasicas.
+    for base in (
+        os.path.join(user_profile, "Desktop"),
+        os.path.join(user_profile, "Downloads"),
+        documents,
+        os.path.join(user_profile, "OneDrive", "Documents"),
+        os.path.join(user_profile, "OneDrive", "Desktop"),
+        user_profile,
+    ):
+        if os.path.isdir(base):
+            roots.append(base)
+
+    # 4. Unidades como ultimo recurso (con presupuesto de tiempo).
     for drive in ("C:", "D:"):
-        if os.path.isdir(drive) and drive not in roots:
+        if os.path.isdir(drive):
             roots.append(drive)
-    return roots
+
+    # Deduplicar conservando el orden.
+    seen = set()
+    unique = []
+    for root in roots:
+        try:
+            key = os.path.normcase(os.path.abspath(root))
+        except Exception:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
 
 
 def _extraer_nombre_carpeta(texto: str) -> str | None:
@@ -338,102 +465,147 @@ def _extraer_nombre_carpeta(texto: str) -> str | None:
     if not ("carpeta" in t or "directorio" in t):
         return None
 
-    filler = {
-        "abre", "abrir", "la", "el", "las", "los", "una", "un",
-        "carpeta", "directorio", "del", "de", "proyecto",
-        "mi", "mis", "en", "explorador", "archivo", "archivos",
-    }
-    # Separar en tokens y quitar solo palabras completas de relleno, para no
-    # romper nombres como "documentos" (contiene "de") ni "descargas".
-    tokens = _re.findall(r"[a-z0-9]+", t)
-    nombre = " ".join(tok for tok in tokens if tok not in filler)
+    nombre = _strip_folder_filler(t)
     if not nombre:
         return None
     return nombre
 
 
 def _tokens_match_folder(name: str, token: str) -> bool:
-    """Compara nombres de carpeta ignorando mayusculas, puntuacion y espacios.
+    """Compat: coincidencia de carpeta por nombre (exacta o contenida)."""
+    return _match_score(token, name) >= 0.9
 
-    El termino de busqueda (token) debe estar contenido en el nombre de la
-    carpeta (no al revés), para evitar falsos positivos como que "R" coincida
-    con "weirdthing".
+
+def _search_folders(
+    query: str,
+    *,
+    max_depth: int = 8,
+    time_budget: float = 6.0,
+    roots: list[str] | None = None,
+    min_score: float = _FOLDER_MIN_SCORE,
+) -> list[tuple[float, str]]:
+    """Camina las raices conocidas y devuelve (score, ruta) de las carpetas
+    que se parecen a `query`. Respeta un presupuesto de tiempo para que una
+    busqueda sin resultado no bloquee el turno (antes tardaba ~19 s)."""
+    roots = roots if roots is not None else _folder_search_roots()
+    deadline = time.time() + max(0.5, time_budget)
+    matches: list[tuple[float, str]] = []
+    seen_dirs: set[str] = set()
+
+    for root in roots:
+        if time.time() >= deadline:
+            break
+        if not root or not os.path.isdir(root):
+            continue
+        try:
+            root_key = os.path.normcase(os.path.abspath(root))
+        except Exception:
+            continue
+        if root_key in seen_dirs:
+            continue
+        seen_dirs.add(root_key)
+
+        queue = [(root, 0)]
+        while queue and time.time() < deadline:
+            current, depth = queue.pop(0)
+            try:
+                entries = list(os.scandir(current))
+            except OSError:
+                continue
+            for entry in entries:
+                if time.time() >= deadline:
+                    return matches
+                try:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                lname = entry.name.lower()
+                if lname in _FOLDER_SKIP_DIRS or lname.startswith("."):
+                    continue
+                score = _match_score(query, entry.name)
+                if score >= min_score:
+                    matches.append((score, entry.path))
+                    if score >= 0.999:
+                        # Coincidencia exacta: no vale la pena seguir caminando.
+                        return matches
+                if depth < max_depth:
+                    queue.append((entry.path, depth + 1))
+    return matches
+
+
+def _folder_suggestions(name: str, limit: int = 3) -> list[str]:
+    """Nombres parecidos para ofrecer al usuario cuando no hubo coincidencia
+    (tipico: el STT transcribio 'caicen' en vez de 'kaizen')."""
+    query = _strip_folder_filler(name) or name
+    matches = _search_folders(query, max_depth=4, time_budget=3.0, min_score=0.55)
+    suggestions: list[str] = []
+    seen: set[str] = set()
+    for _score, path in sorted(matches, key=lambda m: (-m[0], len(m[1]))):
+        base = os.path.basename(path)
+        key = base.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        suggestions.append(base)
+        if len(suggestions) >= limit:
+            break
+    return suggestions
+
+
+def _find_folder(
+    name: str,
+    max_depth: int = 8,
+    time_budget: float = 6.0,
+    min_score: float = _FOLDER_MIN_SCORE,
+) -> str | None:
+    """Busca una carpeta por nombre entre las carpetas conocidas del usuario.
+
+    Tolera errores del STT ('caicen' -> 'kaizen'), palabras de relleno
+    ('abre el proyecto kaizen') y rutas relativas ('Personales\\kaizen').
+    Devuelve la ruta si la encuentra, None si no.
     """
-    name_l = name.lower()
-    name_c = re.sub(r"[^a-z0-9]", "", name_l)
-    token_l = str(token).lower()
-    if not name_c or not token_l:
-        return False
-    if token_l == name_l or token_l in name_l:
-        return True
-    token_c = re.sub(r"[^a-z0-9]", "", token_l)
-    return bool(token_c) and (name_c == token_c or token_c in name_c)
-
-
-def _find_folder(name: str, max_depth: int = 8) -> str | None:
-    """Busca una carpeta por nombre en ubicaciones comunes del usuario.
-
-    Devuelve la ruta de la carpeta si la encuentra, None si no.
-    La busqueda es superficial (max_depth) para no recorrer todo el disco.
-    """
-    token = name.strip()
+    token = (name or "").strip().strip('"').strip("'")
     if not token:
         return None
 
     # Si ya es una ruta directa y existe como carpeta, usarla.
     if os.path.isdir(token):
-        return token
+        return os.path.normpath(token)
 
-    # Si tiene separadores de ruta, intentar como ruta relativa desde el usuario.
+    # Ruta relativa (Personales\kaizen, Proyectos/kaizen...).
     if os.sep in token or "/" in token:
-        candidate = os.path.join(os.environ.get("USERPROFILE", ""), token)
-        if os.path.isdir(candidate):
-            return candidate
+        relative = token.replace("/", os.sep)
+        for base in _folder_search_roots():
+            candidate = os.path.join(base, relative)
+            if os.path.isdir(candidate):
+                return os.path.normpath(candidate)
 
-    exact_matches: list[str] = []
-    partial_matches: list[str] = []
+    query = _strip_folder_filler(token) or token
+    cache_key = _normalize_name(query)
+    now = time.time()
+    cached = _FOLDER_CACHE.get(cache_key)
+    if cached and now - cached[0] < _FOLDER_CACHE_TTL:
+        cached_path = cached[1]
+        return cached_path if cached_path and os.path.isdir(cached_path) else None
 
-    for root in _folder_search_roots():
-        if not os.path.isdir(root):
-            continue
-        try:
-            for dirpath, dirnames, _files in os.walk(root):
-                depth = dirpath.rstrip(os.sep).count(os.sep) - root.rstrip(os.sep).count(os.sep)
-                if depth > max_depth:
-                    dirnames[:] = []
-                    continue
-                # Verificar si el nombre del directorio actual coincide con el token.
-                if _tokens_match_folder(os.path.basename(dirpath), token):
-                    full = dirpath
-                    if _tokens_match_folder(os.path.basename(dirpath), token) and (
-                        re.sub(r"[^a-z0-9]", "", os.path.basename(dirpath).lower())
-                        == re.sub(r"[^a-z0-9]", "", token.lower())
-                    ):
-                        exact_matches.append(full)
-                    else:
-                        partial_matches.append(full)
-                # Verificar subcarpetas.
-                for d in dirnames:
-                    if _tokens_match_folder(d, token):
-                        full = os.path.join(dirpath, d)
-                        if _tokens_match_folder(d, token) and (
-                            re.sub(r"[^a-z0-9]", "", d.lower())
-                            == re.sub(r"[^a-z0-9]", "", token.lower())
-                        ):
-                            exact_matches.append(full)
-                        else:
-                            partial_matches.append(full)
-        except OSError:
-            continue
+    matches = _search_folders(
+        query, max_depth=max_depth, time_budget=time_budget, min_score=min_score
+    )
+    if not matches and query != token:
+        matches = _search_folders(
+            token, max_depth=max_depth, time_budget=time_budget, min_score=min_score
+        )
 
-    # Preferir coincidencia exacta, luego la mas corta (mas cercana a la raiz).
-    if exact_matches:
-        exact_matches.sort(key=len)
-        return exact_matches[0]
-    if partial_matches:
-        partial_matches.sort(key=len)
-        return partial_matches[0]
-    return None
+    if not matches:
+        _FOLDER_CACHE[cache_key] = (now, None)
+        return None
+
+    # Mejor score, luego la ruta mas corta (mas cercana a la raiz).
+    matches.sort(key=lambda m: (-m[0], m[1].count(os.sep), len(m[1])))
+    chosen = matches[0][1]
+    _FOLDER_CACHE[cache_key] = (now, chosen)
+    return chosen
 
 
 def _find_installed_app(name: str) -> str | None:
@@ -518,7 +690,13 @@ Get-ChildItem -Path $roots -Recurse -Filter *.lnk -ErrorAction SilentlyContinue 
         if len(parts) != 2:
             continue
         target, link = parts
-        if _tokens_match(name, target):
+        # Comparar SOLO con el nombre del ejecutable destino, nunca con la ruta
+        # completa: si no, buscar "Personales" devolvia cualquier acceso directo
+        # cuyo destino viviera dentro de ...\Personales\... (p. ej. el .vbs de
+        # Dismiss Lockscreen) y JARVIS ejecutaba ese script en vez de abrir la
+        # carpeta.
+        stem = os.path.splitext(os.path.basename(target))[0]
+        if _tokens_match(name, stem):
             return link
     return None
 
@@ -650,6 +828,19 @@ def _open_application(app_name: str) -> dict:
         except Exception as e:
             return {"error": f"No pude abrir {app_name}: {e}"}
 
+    if os.path.isdir(app_name):
+        try:
+            subprocess.Popen(
+                ["explorer", os.path.normpath(app_name)],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            return {
+                "status": "success",
+                "message": f"Abrí la carpeta {os.path.basename(os.path.normpath(app_name))} en el explorador de archivos.",
+            }
+        except Exception as e:
+            return {"error": f"No pude abrir la carpeta {app_name}: {e}"}
+
     folder = _resolve_folder(key)
     if folder:
         try:
@@ -691,13 +882,12 @@ def _open_application(app_name: str) -> dict:
         except Exception as e:
             return {"error": f"No pude abrir {app_name}: {e}"}
 
-    exe = _APP_MAP.get(key, key)
-
-    target = _resolve_app(exe)
-    if not target:
-        # Antes de rendirse, buscar si es una carpeta arbitraria (proyecto,
-        # trabajo, etc.) en lugar de una aplicación.
-        found_folder = _find_folder(key)
+    # Si no es una app conocida, probar como carpeta ANTES de resolverla como
+    # aplicacion. Asi "abre Personales" o "abre el proyecto kaizen" abren la
+    # carpeta de verdad en vez de un acceso directo cuyo destino contenga ese
+    # texto en su ruta (bug: abria 'Iniciar Dismiss Lockscreen.vbs').
+    if key not in _APP_MAP:
+        found_folder = _find_folder(key, time_budget=3.0, min_score=0.8)
         if found_folder:
             try:
                 subprocess.Popen(
@@ -710,6 +900,31 @@ def _open_application(app_name: str) -> dict:
                         f"Abrí la carpeta '{os.path.basename(found_folder)}' "
                         f"en el explorador de archivos."
                     ),
+                    "path": found_folder,
+                }
+            except Exception as e:
+                return {"error": f"No pude abrir la carpeta '{found_folder}': {e}"}
+
+    exe = _APP_MAP.get(key, key)
+
+    target = _resolve_app(exe)
+    if not target:
+        # Antes de rendirse, buscar si es una carpeta arbitraria (proyecto,
+        # trabajo, etc.) en lugar de una aplicación.
+        found_folder = _find_folder(key, time_budget=3.0)
+        if found_folder:
+            try:
+                subprocess.Popen(
+                    ["explorer", found_folder],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                return {
+                    "status": "success",
+                    "message": (
+                        f"Abrí la carpeta '{os.path.basename(found_folder)}' "
+                        f"en el explorador de archivos."
+                    ),
+                    "path": found_folder,
                 }
             except Exception as e:
                 return {"error": f"No pude abrir la carpeta '{found_folder}': {e}"}
@@ -857,101 +1072,40 @@ def _vscode_set_keybind(command: str, key: str) -> bool:
 def _open_vscode_folder(folder_name: str) -> dict:
     """Abre Visual Studio Code en una carpeta existente de la PC.
 
-    Busca la carpeta por nombre en el escritorio, documentos, descargas y
-    OneDrive, y lanza 'code "ruta"' para que VS Code abra ESA carpeta (no
-    solo VS Code vacio).
+    Busca la carpeta por nombre entre las carpetas conocidas de proyectos
+    (Documents\\Proyectos-Ingenieria-Sistemas y sus subcarpetas Personales,
+    Laborales, etc.), tolera errores del STT y lanza 'code "ruta"' para que
+    VS Code abra ESA carpeta (no solo VS Code vacio).
     """
     name = (folder_name or "").strip()
     if not name:
         return {"error": "Falta el nombre de la carpeta a abrir en VS Code"}
 
-    # Candidatos de base donde suelen estar las carpetas del usuario.
-    # Incluye la carpeta de proyectos de ingenieria y sus subcarpetas.
-    bases = []
-    up = os.environ.get("USERPROFILE", "")
-    candidate_subs = [
-        "Desktop",
-        "Documents",
-        "Downloads",
-        "OneDrive\\Desktop",
-        "OneDrive\\Documents",
-        "Documents\\Proyectos-Ingenieria-Sistemas",
-        "Documents\\Proyectos-Ingenieria-Sistemas\\Personales",
-        "Documents\\Proyectos",
-        "Documents\\Projects",
-    ]
-    for sub in candidate_subs:
-        p = os.path.join(up, sub)
-        if os.path.isdir(p):
-            bases.append(p)
-
-    # También bases adicionales configuradas (config.json -> paths.extra_project_roots)
-    try:
-        extra = get_config().get("paths", {}).get("extra_project_roots", []) or []
-        for e in extra:
-            if isinstance(e, str) and os.path.isdir(e):
-                bases.append(e)
-    except Exception:
-        pass
-
-    # Deduplicar bases.
-    seen_bases = set()
-    uniq_bases = []
-    for b in bases:
-        nb = os.path.normpath(b).lower()
-        if nb in seen_bases:
-            continue
-        seen_bases.add(nb)
-        uniq_bases.append(b)
-    bases = uniq_bases
-
-    # 1) Coincidencia exacta / por tokens en el primer nivel de cada base.
-    candidates = []
-    for base in bases:
-        try:
-            for item in os.listdir(base):
-                if _tokens_match(name, item):
-                    full = os.path.join(base, item)
-                    if os.path.isdir(full):
-                        candidates.append(full)
-        except OSError:
-            continue
-
-    # 2) Si no hubo coincidencia directa, busqueda recursiva mas profunda.
-    if not candidates:
-        name_compact = re.sub(r"[^a-z0-9]", "", name.lower())
-        _skip = {"node_modules", ".git", "__pycache__", "venv", ".venv", ".idea", ".vscode", "dist", "build", "target"}
-        for base in bases:
-            for root, dirs, _files in os.walk(base):
-                depth = root.count(os.sep) - base.count(os.sep)
-                if depth > 5:
-                    dirs[:] = []
-                    continue
-                dirs[:] = [d for d in dirs if d.lower() not in _skip]
-                for d in list(dirs):
-                    dc = re.sub(r"[^a-z0-9]", "", d.lower())
-                    if _tokens_match(name, d) or dc == name_compact or name_compact in dc:
-                        full = os.path.join(root, d)
-                        if os.path.isdir(full):
-                            candidates.append(full)
-                            dirs.remove(d)
-                if candidates:
-                    break
-            if candidates:
-                break
-
-    if not candidates:
+    chosen = _find_folder(name, time_budget=8.0)
+    if not chosen:
+        suggestions = _folder_suggestions(name)
+        msg = f"No encontre una carpeta o proyecto llamado '{name}'."
+        if suggestions:
+            msg += " ¿Quisiste decir: " + ", ".join(suggestions) + "?"
         return {
             "status": "error",
-            "message": f"No encontre una carpeta llamada '{name}' en el escritorio/documentos/descargas.",
+            "message": msg,
+            "suggestions": suggestions,
         }
 
-    # Preferir la coincidencia mas corta (mas cercana a la raiz).
-    candidates.sort(key=lambda p: (p.count(os.sep), len(p)))
-    chosen = candidates[0]
-
+    code_cmd = shutil.which("code") or shutil.which("code.cmd")
     try:
-        subprocess.Popen(["code", chosen], shell=True)
+        if code_cmd:
+            subprocess.Popen(
+                [code_cmd, chosen],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            subprocess.Popen(
+                f'code "{chosen}"',
+                shell=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
     except Exception as e:
         return {"error": f"No pude abrir VS Code en '{chosen}': {e}"}
 
@@ -1194,13 +1348,20 @@ def _control_volume(action: str, level: int = None) -> dict:
 
 @register_tool("shutdown_pc")
 def _shutdown_pc(mode: str = None) -> dict:
-    default = str(get_config().get("power", {}).get("shutdown_mode", "sleep")).lower()
-    chosen = (mode or default or "sleep").lower()
+    default = str(get_config().get("power", {}).get("shutdown_mode", "hibernate")).lower()
+    chosen = (mode or default or "hibernate").lower()
 
     try:
         if chosen in ("off", "poweroff", "real", "full", "apagar"):
             subprocess.Popen(["shutdown", "/s", "/t", "60", "/c", "JARVIS apagando la PC en 60 segundos"])
             return {"status": "success", "message": "La PC se apagará de verdad en 60 segundos. Para cancelar: shutdown /a"}
+        if chosen in ("hibernate", "hibernar", "h"):
+            # 1 = hibernate (guarda RAM en disco y apaga), 1 = force, 0 = permitir wake events
+            subprocess.Popen(["rundll32", "powrprof.dll,SetSuspendState", "1,1,0"])
+            return {
+                "status": "success",
+                "message": "La PC se está HIBERNANDO (guardando la RAM en disco). Podrás encenderla con wake-on-LAN SOLO si tu BIOS lo soporta; si no despierta, usa 'sleep' o 'off' + smart plug.",
+            }
         subprocess.Popen(["rundll32", "powrprof.dll,SetSuspendState", "0,1,0"])
         return {
             "status": "success",

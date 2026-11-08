@@ -51,7 +51,9 @@ HERRAMIENTAS:
 - PREGUNTAS FACTUALES: si ya sabes la respuesta, contesta con texto y NO
   llames herramientas ni abras nada.
 - Acciones peligrosas (enviar email, apagar PC, ejecutar codigo, borrar):
-  advierte al usuario antes.
+  LLAMA la herramienta directamente; el sistema pide la confirmacion al
+  usuario (por voz o con botones en Telegram). NO pidas confirmacion en texto
+  ni te niegues a ejecutarla.
 - Acciones moderadas (abrir apps, crear eventos): ejecutalas directamente.
 - Si abriste algo por error y el usuario te corrige, cierra lo equivocado
   ANTES de abrir lo correcto.
@@ -172,13 +174,25 @@ PACK_DEV = """PROGRAMAR (OpenCode):
   atajo de OpenCode, foco). DESPUES no uses press_key, type_text ni
   run_python_code para "abrir OpenCode" o escribir en la paleta: solo reporta
   el resultado. Para solo quitar el Restricted Mode usa
-  vscode_disable_restricted_mode."""
+  vscode_disable_restricted_mode.
+- open_vscode_folder ya busca en las carpetas de proyectos del usuario
+  (Documents\\Proyectos-Ingenieria-Sistemas y sus subcarpetas Personales,
+  Laborales, Aprendizajes, Universitarios). Pasale SOLO el nombre del proyecto
+  ('kaizen'), sin ruta. Corrige errores parecidos del STT ('caicen' -> 'kaizen');
+  si aun asi no lo encuentra devuelve 'suggestions': preguntale al usuario cual
+  de esas queria y vuelve a llamar la tool con ese nombre exacto."""
 
 
 PACK_POWER = """ENERGIA Y RED:
-- shutdown_pc SIN mode='off': eso suspende la PC, que es lo que permite
-  despertarla despues con wake-on-LAN. Usa mode='off' SOLO si pide
-  explicitamente "apagado real" o "apagar del todo".
+- shutdown_pc con mode omitido o 'hibernate': HIBERNA la PC de verdad (guarda la RAM
+  en disco y apaga). Es el modo por defecto: permite encenderla luego con
+  wake-on-LAN desde el celular (verificado en esta laptop: WOL despierta desde
+  hibernacion y el GRUB auto-selecciona Windows). Usalo cuando el usuario diga
+  "apaga", "apagar", "apagate", "hiberna", "hibernar" o similar.
+- mode='sleep': SUSPENDE la PC (RAM encendida, mas rapido de despertar). Usalo SOLO
+  si el usuario pide explicitamente "suspender" o "suspension".
+- mode='off': apagado real (S5). SOLO si pide explicitamente "apagado real",
+  "apagar del todo" o "quitar energia". NO despierta con WOL en esta laptop.
 - restart_pc reinicia. wake_on_lan enciende otra PC de la red local."""
 
 

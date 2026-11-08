@@ -7,7 +7,7 @@ import customtkinter as ctk
 from config import get_config
 from gui import theme
 from gui.call_view import CallView
-from gui.header import HINT_IDLE, HINT_LISTENING, InfoCard, TopBar
+from gui.header import HINT_DEAF, HINT_IDLE, HINT_LISTENING, InfoCard, TopBar
 from gui.subtitles import SubtitleStack
 from gui.tasks import TaskPanel
 
@@ -17,6 +17,7 @@ STATE_LABELS = {
     "processing": "PROCESANDO",
     "speaking": "HABLANDO",
     "call": "EN LLAMADA",
+    "deaf": "MODO SORDO",
 }
 
 
@@ -49,6 +50,7 @@ class JarvisGUI(ctk.CTk):
         self._on_ptt_stop = None
         self._on_ptt_cancel = None
         self._on_ptt_interrupt = None
+        self._on_deaf_off = None
         self._on_call_toggle = None
         self._model_provider = None
 
@@ -190,6 +192,15 @@ class JarvisGUI(ctk.CTk):
     def _ptt_press(self):
         if self._ptt_active:
             return
+        if self._state == "deaf":
+            # Salida del modo sordo sin micro ni Telegram: es una accion
+            # deliberada del teclado/raton, no audio.
+            if self._on_deaf_off is not None:
+                try:
+                    self._on_deaf_off()
+                except Exception:
+                    pass
+            return
         if self._state == "speaking":
             # Hablar encima de JARVIS: corta el TTS y escucha.
             if self._on_ptt_interrupt is not None:
@@ -286,12 +297,14 @@ class JarvisGUI(ctk.CTk):
         if state == "processing":
             if self._turn_start is None:
                 self._turn_start = time.perf_counter()
-        elif state in ("idle", "listening", "call"):
+        elif state in ("idle", "listening", "call", "deaf"):
             self._freeze_turn()
             if state == "idle":
                 self._tasks.close_open()
 
-        if state == "listening" and self._ptt_active:
+        if state == "deaf":
+            self._top_bar.set_hint(HINT_DEAF)
+        elif state == "listening" and self._ptt_active:
             self._top_bar.set_hint(HINT_LISTENING)
         elif state in ("processing", "speaking", "call"):
             self._top_bar.set_hint(HINT_IDLE)
@@ -369,6 +382,10 @@ class JarvisGUI(ctk.CTk):
     def on_ptt_interrupt(self, callback):
         """Corta el habla de JARVIS para que el usuario pueda hablar encima."""
         self._on_ptt_interrupt = callback
+
+    def on_deaf_off(self, callback):
+        """Salir del modo sordo tocando el orbe o manteniendo ESPACIO."""
+        self._on_deaf_off = callback
 
     def on_call_toggle(self, callback):
         """Registra el callback para activar/desactivar el modo llamada."""

@@ -82,20 +82,26 @@ TOOLS = [
     types.FunctionDeclaration(
         name="open_vscode_folder",
         description=(
-            "Abre Visual Studio Code EN una carpeta existente de la PC (no solo "
-            "VS Code vacio). Busca la carpeta por nombre en el escritorio, "
-            "documentos, descargas y OneDrive. Usala SIEMPRE que el usuario pida "
-            "abrir una carpeta/proyecto en VS Code (ej: 'abre ecommerce laptops "
-            "en vscode', 'abre mi proyecto X en visual studio code'). NO uses "
-            "run_python_code para esto: esta herramienta ya busca la carpeta y "
-            "lanza 'code \"ruta\"'."
+            "Abre Visual Studio Code EN una carpeta/proyecto existente de la PC (no "
+            "solo VS Code vacio). Busca en las carpetas de proyectos del usuario "
+            "(Documents\\Proyectos-Ingenieria-Sistemas y subcarpetas Personales, "
+            "Laborales, Aprendizajes, Universitarios), escritorio, documentos, "
+            "descargas y OneDrive, y tolera errores parecidos del STT. Usala "
+            "SIEMPRE que el usuario pida abrir una carpeta/proyecto en VS Code "
+            "(ej: 'abre ecommerce laptops en vscode', 'abre mi proyecto kaizen en "
+            "visual studio code'). NO uses run_python_code para esto: esta "
+            "herramienta ya busca la carpeta y lanza 'code \"ruta\"'. Si no la "
+            "encuentra devuelve 'suggestions' con nombres parecidos."
         ),
         parameters=_schema(
             types.Type.OBJECT,
             properties={
                 "folder_name": _schema(
                     types.Type.STRING,
-                    description="Nombre de la carpeta a abrir en VS Code (ej: 'ecommerce laptops')",
+                    description=(
+                        "Nombre (o ruta) de la carpeta/proyecto a abrir en VS Code. "
+                        "Ej: 'kaizen', 'ecommerce laptops', 'Personales\\kaizen'."
+                    ),
                 ),
             },
             required=["folder_name"],
@@ -163,18 +169,21 @@ TOOLS = [
     types.FunctionDeclaration(
         name="shutdown_pc",
         description=(
-            "Suspende o apaga la PC. Por defecto (mode omitido) la SUSPENDE, dejandola "
-            "dormida para poder encenderla luego con wake-on-LAN desde el celular. "
-            "Usa mode='off' SOLO cuando el usuario pida explicitamente 'apagado real', "
-            "'apagar del todo' o 'quitar energia'. Accion peligrosa que requiere confirmacion."
+            "Hiberna, suspende o apaga la PC. Por defecto (mode omitido) la HIBERNA de "
+            "verdad (guarda la RAM en disco y apaga), dejandola apagada pero recuperable "
+            "con wake-on-LAN desde el celular. Usa mode='sleep' si el usuario pide "
+            "explicitamente 'suspender' o 'suspension' (RAM encendida, mas rapido de "
+            "despertar). Usa mode='off' SOLO cuando pida explicitamente 'apagado real', "
+            "'apagar del todo' o 'quitar energia' (NO despierta con WOL en esta laptop). "
+            "Accion peligrosa que requiere confirmacion."
         ),
         parameters=_schema(
             types.Type.OBJECT,
             properties={
                 "mode": _schema(
                     types.Type.STRING,
-                    description="'sleep' (default, suspende) o 'off' (apagado real)",
-                    enum=["sleep", "off"],
+                    description="'hibernate' (default, hiberna de verdad), 'sleep' (suspender) o 'off' (apagado real)",
+                    enum=["sleep", "hibernate", "off"],
                 ),
             },
         ),

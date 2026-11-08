@@ -24,6 +24,21 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(r.tier, "strong")
         self.assertIn("opencode_code", r.tools)
 
+    def test_visual_studio_code_phrase_offers_vscode_tool(self):
+        # El STT escribe "Visual Studio Code" con espacios: antes el router no
+        # lo reconocia y Gemini no tenia open_vscode_folder disponible.
+        r = router.route("a ver el proyecto kaizen con Visual Studio Code")
+        self.assertIn("dev", r.packs)
+        self.assertIn("open_vscode_folder", r.tools)
+        self.assertEqual(r.tier, "strong")
+
+    def test_vscode_and_vs_code_still_detected(self):
+        for text in ("abre mi proyecto en vscode", "abre el proyecto en vs code"):
+            with self.subTest(text=text):
+                r = router.route(text)
+                self.assertIn("dev", r.packs)
+                self.assertIn("open_vscode_folder", r.tools)
+
     def test_mail_pack(self):
         r = router.route("abre gmail institucional")
         self.assertIn("mail", r.packs)

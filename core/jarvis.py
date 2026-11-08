@@ -15,6 +15,8 @@ from services.audio import (
 )
 from services.stt import transcribe, preload_model as preload_stt
 from services.tts import speak, stop_speech, shutdown as shutdown_tts, is_speaking
+from services import deaf_mode
+from services.power_commands import match_power_command
 from memory.context import (
     start_session, end_current_session, save_conversation,
     build_system_context,
@@ -85,6 +87,7 @@ class State(Enum):
     PROCESSING = "processing"
     SPEAKING = "speaking"
     CALL = "call"
+    DEAF = "deaf"  # modo sordo: no se escucha nada (ni micro, ni palmadas)
 
 
 class JARVIS:
@@ -107,8 +110,17 @@ class JARVIS:
 
         self._brain.set_task_callback(self._emit_task)
 
+        # Modo sordo: si estaba activo antes de reiniciar, sigue activo.
+        deaf_mode.add_listener(self._on_deaf_change)
+        if deaf_mode.is_deaf():
+            logger.info("JARVIS arranca en MODO SORDO (%s)", deaf_mode.status_text())
+
         start_session()
         threading.Thread(target=preload_stt, daemon=True).start()
+
+        if deaf_mode.is_deaf():
+            self._set_state(State.DEAF)
+
         logger.info("JARVIS inicializado")
 
     def set_callbacks(self, on_state_change=None, on_message=None, on_audio_level=None, on_confirmation=None, on_call_active=None, on_task=None):
@@ -157,6 +169,11 @@ class JARVIS:
         respuestas breves ("si") o dichas en voz baja no se pierdan.
         """
         import numpy as np
+
+        if deaf_mode.is_deaf():
+            # Sin micro no hay confirmacion posible: se cancela por seguridad.
+            logger.warning("Confirmacion por voz imposible: modo sordo activo")
+            return False
 
         for attempt in (1, 2):
             self._set_state(State.SPEAKING)
@@ -210,19 +227,28 @@ class JARVIS:
         return False
 
     def confirm_action(self, tool_name: str, args: dict) -> bool:
-        if self._on_confirmation is None:
-            logger.warning(
-                "Sin confirmacion GUI configurada. Bloqueando accion dangerous: %s",
-                tool_name,
-            )
-            return False
+        if self._on_confirmation is not None:
+            try:
+                return bool(self._on_confirmation(tool_name, args))
+            except Exception as e:
+                logger.error("Error en confirmacion GUI para %s: %s", tool_name, e)
+                return False
+        # Sin GUI (o callback no cableado): confirmar por voz como respaldo.
         try:
-            return bool(self._on_confirmation(tool_name, args))
-        except Exception as e:
-            logger.error("Error en confirmacion GUI para %s: %s", tool_name, e)
-            return False
+            from core.confirmations import confirmation_request
+
+            title, _ = confirmation_request(tool_name, args)
+        except Exception:
+            title = tool_name
+        logger.info("Confirmando %s por voz (sin GUI)", tool_name)
+        return self.confirm_by_voice(
+            f"Señor, ¿confirma la accion: {title}?", listen_timeout=10
+        )
 
     def _set_state(self, new_state: State):
+        # En modo sordo no existe el reposo normal: la GUI muestra DEAF.
+        if new_state == State.IDLE and deaf_mode.is_deaf():
+            new_state = State.DEAF
         self.state = new_state
         if self._on_state_change:
             self._on_state_change(new_state.value)
@@ -230,18 +256,137 @@ class JARVIS:
 
         # El detector de palmadas solo vive mientras JARVIS esta en reposo:
         # se pausa al grabar/procesar/hablar y se reanuda al volver a IDLE.
+        # En modo sordo no se reanuda nunca (esa es la idea).
         try:
             from services import clap_detector
 
-            if new_state == State.IDLE:
+            if new_state == State.IDLE and not deaf_mode.is_deaf():
                 clap_detector.resume()
             else:
                 clap_detector.pause()
         except Exception as e:
             logger.debug("Clap detector no disponible: %s", e)
 
+    # ── Modo sordo ───────────────────────────────────────────────────
+
+    def is_deaf(self) -> bool:
+        return deaf_mode.is_deaf()
+
+    def set_deaf(self, value: bool, source: str = "manual") -> bool:
+        """Activa/desactiva el modo sordo (desde Telegram, GUI o voz)."""
+        return deaf_mode.set_deaf(value, source)
+
+    def toggle_deaf(self, source: str = "manual") -> bool:
+        return deaf_mode.toggle(source)
+
+    def _on_deaf_change(self, deaf: bool):
+        """Reacciona al cambio de modo sordo: corta lo que este sonando/grabando."""
+        if deaf:
+            logger.info("Entrando en modo sordo: cerrando micro, palmadas y llamada")
+            self._ptt_wanted = False
+            self._push_to_talk = False
+            if self._call_active:
+                self.stop_call()
+            if is_recording():
+                try:
+                    stop_recording()
+                except Exception as e:
+                    logger.warning("Error cerrando el microfono: %s", e)
+            if is_speaking():
+                stop_speech()
+            self._set_state(State.DEAF)
+        else:
+            logger.info("Saliendo del modo sordo: vuelve a escuchar")
+            self._set_state(State.IDLE)
+
+    def _handle_deaf_command(self, text: str, command: str):
+        """Orden de modo sordo dicha por voz o escrita en la GUI.
+
+        Se intercepta ANTES de Gemini: no gasta tokens y no depende de que el
+        modelo "entienda" la orden.
+        """
+        self._notify_message("user", text)
+        save_conversation("user", text)
+
+        if command == "on":
+            self.set_deaf(True, source="voz")
+            reply = (
+                "Modo sordo activado. Para volver a escucharme, pidemelo por Telegram."
+            )
+        else:
+            self.set_deaf(False, source="voz")
+            reply = "Listo, volvi a escuchar."
+
+        self._set_state(State.SPEAKING)
+        self._notify_message("model", reply)
+        save_conversation("model", reply)
+        try:
+            speak(reply)
+            deadline = time.time() + 15
+            while is_speaking() and time.time() < deadline:
+                time.sleep(0.1)
+        except Exception as e:
+            logger.warning("No se pudo confirmar el modo sordo por voz: %s", e)
+        self._set_state(State.IDLE)
+
+    def _handle_power_command(self, text: str, cmd: dict):
+        """Ejecuta una orden de energia interceptada antes de Gemini."""
+        self._notify_message("user", text)
+        save_conversation("user", text)
+
+        action = cmd.get("action")
+        reply = "Listo."
+
+        try:
+            if action == "shutdown":
+                approved = self.confirm_action("shutdown_pc", {"mode": cmd.get("mode")})
+                if not approved:
+                    reply = "Cancelado: la PC sigue encendida."
+                else:
+                    from tools.system import _shutdown_pc
+
+                    result = _shutdown_pc(cmd.get("mode"))
+                    reply = (result or {}).get("message") or (result or {}).get("error") or "Listo."
+                    if (result or {}).get("error"):
+                        reply = f"No pude: {result['error']}"
+
+            elif action == "restart":
+                approved = self.confirm_action("restart_pc", {})
+                if not approved:
+                    reply = "Cancelado: la PC no se reiniciara."
+                else:
+                    from tools.system import _restart_pc
+
+                    result = _restart_pc()
+                    reply = (result or {}).get("message") or (result or {}).get("error") or "Listo."
+                    if (result or {}).get("error"):
+                        reply = f"No pude: {result['error']}"
+
+            elif action == "wake":
+                from tools.system import _wake_on_lan
+
+                result = _wake_on_lan()
+                reply = (result or {}).get("message") or (result or {}).get("error") or "Listo."
+                if (result or {}).get("error"):
+                    reply = f"No pude: {result['error']}"
+        except Exception as e:
+            logger.error("Error ejecutando orden de energia: %s", e)
+            reply = f"Tuve un error: {e}"
+
+        self._set_state(State.SPEAKING)
+        self._notify_message("model", reply)
+        save_conversation("model", reply)
+        try:
+            speak(reply)
+            deadline = time.time() + 30
+            while is_speaking() and time.time() < deadline:
+                time.sleep(0.1)
+        except Exception as e:
+            logger.warning("No se pudo hablar la respuesta de energia: %s", e)
+        self._set_state(State.IDLE)
+
     def process_text(self, text: str):
-        if self.state != State.IDLE:
+        if self.state not in (State.IDLE, State.DEAF):
             logger.warning("No se puede procesar, estado: %s", self.state.value)
             return
 
@@ -251,6 +396,14 @@ class JARVIS:
     def _process_text_thread(self, text: str):
         with self._lock:
             self._set_state(State.PROCESSING)
+            command = deaf_mode.match_command(text)
+            if command is not None:
+                self._handle_deaf_command(text, command)
+                return
+            power_cmd = match_power_command(text)
+            if power_cmd is not None:
+                self._handle_power_command(text, power_cmd)
+                return
             self._notify_message("user", text)
             save_conversation("user", text)
 
@@ -271,6 +424,10 @@ class JARVIS:
                 self._set_state(State.IDLE)
 
     def start_listening(self, push_to_talk: bool = False):
+        if deaf_mode.is_deaf():
+            logger.info("Modo sordo activo: escucha ignorada")
+            return
+
         self._ptt_wanted = bool(push_to_talk)
 
         # Push-to-talk encima del habla: corta el TTS y espera (en segundo
@@ -295,7 +452,7 @@ class JARVIS:
         self._begin_listening(push_to_talk)
 
     def _begin_listening(self, push_to_talk: bool):
-        if self.state != State.IDLE:
+        if self.state != State.IDLE or deaf_mode.is_deaf():
             return
 
         with self._lock:
@@ -360,6 +517,9 @@ class JARVIS:
 
     def on_double_clap(self):
         """Callback del detector de palmadas: saluda y empieza a escuchar."""
+        if deaf_mode.is_deaf():
+            logger.info("Doble palmada ignorada (modo sordo)")
+            return
         if self.state != State.IDLE:
             logger.info("Doble palmada ignorada (estado=%s)", self.state.value)
             return
@@ -420,6 +580,17 @@ class JARVIS:
             t1 = time.perf_counter()
             logger.info("LATENCIA STT: %.0f ms", (t1 - t0) * 1000)
 
+            # Orden de modo sordo: se atiende antes de Gemini.
+            command = deaf_mode.match_command(text) if text else None
+            if command is not None:
+                self._handle_deaf_command(text, command)
+                return
+
+            power_cmd = match_power_command(text) if text else None
+            if power_cmd is not None:
+                self._handle_power_command(text, power_cmd)
+                return
+
             if not text:
                 logger.info("No se detecto voz")
                 speak("No te escuche, intenta de nuevo.")
@@ -470,6 +641,9 @@ class JARVIS:
             self._set_state(State.IDLE)
 
     def start_call(self):
+        if deaf_mode.is_deaf():
+            logger.info("Modo sordo activo: llamada ignorada")
+            return
         if self._call_active:
             return
 
@@ -548,6 +722,16 @@ class JARVIS:
             t1 = time.perf_counter()
             logger.info("LATENCIA STT (call): %.0f ms", (t1 - t0) * 1000)
 
+            command = deaf_mode.match_command(text) if text else None
+            if command is not None:
+                self._handle_deaf_command(text, command)
+                return
+
+            power_cmd = match_power_command(text) if text else None
+            if power_cmd is not None:
+                self._handle_power_command(text, power_cmd)
+                return
+
             if not text:
                 return
 
@@ -597,7 +781,7 @@ class JARVIS:
         Usa un umbral mas alto y filtra eco para no oirse a si mismo.
         """
         voice = get_config().get("voice", {})
-        if not voice.get("interrupt_enabled", True):
+        if deaf_mode.is_deaf() or not voice.get("interrupt_enabled", True):
             while is_speaking():
                 time.sleep(0.1)
             return False, None
