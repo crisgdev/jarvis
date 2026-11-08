@@ -102,10 +102,10 @@ class DeepResolveTest(unittest.TestCase):
 
 class OpenFolderTest(unittest.TestCase):
     def test_open_folder(self):
-        with mock.patch("tools.system._resolve_folder", return_value="C:\\Users\\USER\\Downloads"):
+        with mock.patch("tools.system._resolve_folder", return_value="C:\\\\Users\\\\example\\Downloads"):
             with mock.patch("tools.system.os.startfile") as mock_start:
                 result = execute_tool("open_application", {"app_name": "descargas"})
-        mock_start.assert_called_once_with("C:\\Users\\USER\\Downloads")
+        mock_start.assert_called_once_with("C:\\\\Users\\\\example\\Downloads")
         self.assertEqual(result["status"], "success")
 
 
@@ -114,7 +114,7 @@ class TokensMatchTest(unittest.TestCase):
         from tools.system import _tokens_match
         self.assertTrue(_tokens_match("geometry dash", "Geometry.Dash.v2.207"))
         self.assertTrue(_tokens_match("rocket league", "RocketLeague.exe"))
-        self.assertTrue(_tokens_match("pokemon reloaded", "C:\\Users\\USER\\Documents\\Carpetas\\Pokemon Reloaded\\Proyecto.exe"))
+        self.assertTrue(_tokens_match("pokemon reloaded", "C:\\\\Users\\\\example\\Documents\\Carpetas\\Pokemon Reloaded\\Proyecto.exe"))
         self.assertFalse(_tokens_match("word", "Photoshop"))
 
 
