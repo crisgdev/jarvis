@@ -9,7 +9,6 @@
         "stt_initial_prompt": "Hola JARVIS, abre google, abre youtube, dime la hora, cual es la fecha, reproduce musica, envia un correo, crea un evento, recuerda que, gracias",
         "stt_hotwords": [
             "JARVIS",
-            "Cristopher",
             "OpenCode",
             "Gmail",
             "YouTube",
@@ -71,7 +70,7 @@
         "db_path": "jarvis_memory.db"
     },
     "calendar": {
-        "timezone": "America/Lima",
+        "timezone": "UTC",
         "primary_calendar_id": "primary",
         "include_all_user_calendars": true,
         "max_results": 100
@@ -91,7 +90,7 @@
         "silence_threshold": 500,
         "silence_timeout": 1.2,
         "safety_max_seconds": 45,
-        "input_device": "Realtek"
+        "input_device": "default"
     },
     "browser": {
         "chrome_profile": "auto",
@@ -140,8 +139,8 @@
         "shutdown_mode": "hibernate"
     },
     "wol": {
-        "mac": "B0:6E:BF:11:1A:4C",
-        "broadcast": "192.168.18.255",
+        "mac": "00:00:00:00:00:00",
+        "broadcast": "192.168.1.255",
         "port": 9
     }
 }

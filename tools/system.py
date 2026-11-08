@@ -144,33 +144,15 @@ _WEBSITE_MAP = {
 # Perfiles de Chrome para cada cuenta de Gmail.
 # Cada perfil mantiene su propia sesion iniciada, asi se puede abrir la
 # cuenta correcta sin hacer login cada vez.
+# Configura aqui tus propias cuentas/perfiles de Chrome (vacio por defecto).
+GMAIL_PROFILES = {}
+
+# Alias amigables -> correo de la cuenta
+GMAIL_ALIASES = {}
+
 CHROME_USER_DATA = os.path.expandvars(
     r"%LOCALAPPDATA%\Google\Chrome\User Data"
 )
-
-GMAIL_PROFILES = {
-    "cristopherguevara2006@gmail.com": ("Principal", "Default"),
-    "cristopherguevara456@gmail.com": ("Secundaria", "Profile 5"),
-    "70597122@continental.edu.pe": ("Institucional", "Profile 2"),
-    "cristopher.guevara.dev@gmail.com": ("Profesional", "Profile 7"),
-}
-
-# Alias amigables -> correo de la cuenta
-GMAIL_ALIASES = {
-    "gmail principal": "cristopherguevara2006@gmail.com",
-    "gmail personal": "cristopherguevara2006@gmail.com",
-    "mi gmail": "cristopherguevara2006@gmail.com",
-    "gmail secundaria": "cristopherguevara456@gmail.com",
-    "gmail personal secundaria": "cristopherguevara456@gmail.com",
-    "gmail institucional": "70597122@continental.edu.pe",
-    "correo institucional": "70597122@continental.edu.pe",
-    "universidad": "70597122@continental.edu.pe",
-    "continental": "70597122@continental.edu.pe",
-    "gmail profesional": "cristopher.guevara.dev@gmail.com",
-    "correo profesional": "cristopher.guevara.dev@gmail.com",
-    "trabajo": "cristopher.guevara.dev@gmail.com",
-    "dev": "cristopher.guevara.dev@gmail.com",
-}
 
 
 def _detectar_cuenta_gmail(texto: str) -> str | None:

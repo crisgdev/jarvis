@@ -39,7 +39,6 @@ Jarvis/
 ├── tests/                  # 265 tests (unittest)
 ├── wake_listener.py        # Companion WOL standalone (Termux/Raspberry)
 ├── enable_wol.ps1          # Activa Wake-on-LAN en Windows
-└── AGENTS.md               # Contexto completo del proyecto
 ```
 
 ## Instalación
@@ -112,7 +111,7 @@ JARVIS no programa por su cuenta: delega en **OpenCode**, que expone un servidor
 
 ## Más información
 
-Contexto completo del proyecto, decisiones de arquitectura y preferencias del usuario en [`AGENTS.md`](AGENTS.md).
+Arquitectura y decisiones de diseno en la carpeta docs/ y en el codigo fuente.
 
 ## Licencia
 

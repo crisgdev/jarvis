@@ -17,7 +17,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$TargetMac = 'B0:6E:BF:11:1A:4C'
+$TargetMac = '00:00:00:00:00:00'  # Reemplaza con la MAC de tu adaptador (ver ipconfig /all)
 $ClassKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}'
 $BackupDir = Join-Path $PSScriptRoot 'wol_backup'
 $BackupFile = Join-Path $BackupDir 'wol_backup.json'
@@ -78,7 +78,7 @@ function Find-Adapter {
         Where-Object { (Normalize-Mac $_.MacAddress) -eq (Normalize-Mac $TargetMac) } |
         Select-Object -First 1
     if (-not $nic) { $nic = Get-NetAdapter -Name 'Ethernet 3' -ErrorAction SilentlyContinue }
-    if (-not $nic) { throw 'No se encontro el adaptador Ethernet (busque por MAC B0:6E:BF:11:1A:4C o nombre "Ethernet 3").' }
+    if (-not $nic) { throw 'No se encontro el adaptador Ethernet. Ajusta $TargetMac o el nombre del adaptador.' }
     return $nic
 }
 

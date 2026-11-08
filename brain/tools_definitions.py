@@ -72,7 +72,7 @@ TOOLS = [
                         "Nombre de la app, sitio web o cuenta de gmail a abrir. "
                         "Ejemplos: google, youtube, chrome, spotify, gmail, "
                         "'gmail institucional', 'gmail principal', 'gmail profesional', "
-                        "'gmail secundaria', '70597122@continental.edu.pe', etc."
+                        "'gmail secundaria', 'tu_correo@ejemplo.com', etc."
                     ),
                 ),
             },

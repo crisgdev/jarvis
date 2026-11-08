@@ -158,7 +158,7 @@ class ForgetToolTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_forget_deletes_matching_memory(self):
-        self._mdb.save_note("Cristopher tiene 19 anios", "general")
+        self._mdb.save_note("TestUser tiene 19 anios", "general")
         self._mdb.save_note("comprar pan", "task")
         res = execute_tool("forget_information", {"keywords": "19 anios edad"})
         self.assertEqual(res["count"], 1)

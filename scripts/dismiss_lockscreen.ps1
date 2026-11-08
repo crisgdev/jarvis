@@ -3,8 +3,9 @@
 # Se ejecuta como SYSTEM via Tarea Programada.
 
 $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$logPath = "C:\Users\USER\Documents\Proyectos-Ingenieria-Sistemas\Personales\jarvis\logs\dismiss_lockscreen.log"
-$lockFile = "C:\Users\USER\Documents\Proyectos-Ingenieria-Sistemas\Personales\jarvis\logs\dismiss_lockscreen.lock"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$logPath = Join-Path $projectRoot "logs\dismiss_lockscreen.log"
+$lockFile = Join-Path $projectRoot "logs\dismiss_lockscreen.lock"
 
 # Cooldown: no ejecutar si se ejecuto hace menos de 30 segundos
 if (Test-Path $lockFile) {

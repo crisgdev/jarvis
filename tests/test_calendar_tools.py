@@ -6,7 +6,7 @@ from googleapiclient.errors import HttpError
 
 from tools import calendar_tools as ct
 
-PRIMARY_ID = "cristopherguevara2006@gmail.com"
+PRIMARY_ID = "user@example.com"
 U_ID = "u@group.calendar.google.com"
 HOLIDAY_ID = "es.pe#holiday@group.v.calendar.google.com"
 
@@ -111,8 +111,8 @@ def _ev(ev_id, start, end, summary):
 class CalendarBodyTest(unittest.TestCase):
     def test_date_time_gets_config_timezone(self):
         body = ct._event_body("Estudiar", "2026-09-21T18:00:00", "2026-09-21T19:00:00")
-        self.assertEqual(body["start"], {"dateTime": "2026-09-21T18:00:00", "timeZone": "America/Lima"})
-        self.assertEqual(body["end"]["timeZone"], "America/Lima")
+        self.assertEqual(body["start"], {"dateTime": "2026-09-21T18:00:00", "timeZone": "UTC"})
+        self.assertEqual(body["end"]["timeZone"], "UTC")
 
     def test_offset_datetime_kept_verbatim(self):
         body = ct._event_body("X", "2026-09-21T18:00:00-05:00", "2026-09-21T19:00:00-05:00")
@@ -144,7 +144,7 @@ class RecurrenceTest(unittest.TestCase):
 
     def test_weekly_rule_with_until_timed_converts_to_utc(self):
         rule = ct._build_recurrence("RRULE:FREQ=WEEKLY;BYDAY=TU", "2026-10-15", False)
-        self.assertEqual(rule, ["RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261016T045959Z"])
+        self.assertEqual(rule, ["RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261015T235959Z"])
 
     def test_until_all_day_keeps_date(self):
         rule = ct._build_recurrence("RRULE:FREQ=DAILY", "2026-10-15", True)
@@ -309,9 +309,9 @@ class CreateEventTest(unittest.TestCase):
         inserted_body = svc.events_api.inserted[0][1]
         self.assertEqual(
             inserted_body["recurrence"],
-            ["RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261016T045959Z"],
+            ["RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261015T235959Z"],
         )
-        self.assertEqual(res["recurrence"], "RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261016T045959Z")
+        self.assertEqual(res["recurrence"], "RRULE:FREQ=WEEKLY;BYDAY=TU;UNTIL=20261015T235959Z")
 
 
 class UpdateEventTest(unittest.TestCase):

@@ -71,7 +71,7 @@ class ShortcutByTargetTest(unittest.TestCase):
         # Bug real: buscar "personales" devolvia el acceso directo cuyo destino
         # vivia en ...\Personales\jarvis\... y se ejecutaba ese script.
         target = (
-            r"C:\Users\USER\Documents\Proyectos-Ingenieria-Sistemas\Personales"
+            r"C:\Users\example\Documents\Projects"
             r"\jarvis\dismiss_lockscreen.ps1"
         )
         link = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\Dismiss Lockscreen.lnk"
@@ -90,7 +90,7 @@ class ShortcutByTargetTest(unittest.TestCase):
 class OpenApplicationFolderFirstTest(unittest.TestCase):
     def test_folder_wins_over_app_resolution(self):
         folder = (
-            r"C:\Users\USER\Documents\Proyectos-Ingenieria-Sistemas\Personales"
+            r"C:\Users\example\Documents\Projects"
         )
         with mock.patch.object(system, "_find_folder", return_value=folder), \
                 mock.patch.object(system, "_resolve_app") as resolve, \

@@ -70,9 +70,9 @@ class MemoryDatabaseTest(unittest.TestCase):
         self.assertTrue(any("leche" in n["content"] for n in results))
 
     def test_recall_token_fallback(self):
-        db.save_note("el nombre del usuario es Cristopher", "general")
+        db.save_note("el nombre del usuario es TestUser", "general")
         results = db.recall_notes("nombre del usuario")
-        self.assertTrue(any("Cristopher" in n["content"] for n in results))
+        self.assertTrue(any("TestUser" in n["content"] for n in results))
 
     def test_recent_notes(self):
         db.save_note("primera nota", "a")
@@ -103,7 +103,7 @@ class MemoryDatabaseTest(unittest.TestCase):
         self.assertEqual(db.get_preference("idioma"), "en")
 
     def test_delete_notes_by_content_case_insensitive(self):
-        db.save_note("la edad de Cristopher es 19 anios.", "general")
+        db.save_note("la edad de TestUser es 19 anios.", "general")
         db.save_note("la edad del usuario es un dato personal", "general")
         db.save_note("comprar manzanas", "task")
         deleted = db.delete_notes_by_content("edad")
